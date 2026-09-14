@@ -15,6 +15,27 @@ def team(t,name,rut):
     a=attendee(rut,name); e=Equipo.objects.create(torneo=t,nombre=name,capitan=a,estado="confirmado"); Integrante.objects.create(equipo=e,asistente=a); return e
 
 class TorneoTests(TestCase):
+    def _admin(self):
+        client=APIClient(); client.force_authenticate(get_user_model().objects.create_user("config-admin")); return client
+
+    def test_aumentar_cupo_promueve_lista_de_espera_en_orden(self):
+        t=tournament(1); team(t,"A",_rut_valido(0)); primero=team(t,"B",_rut_valido(1)); segundo=team(t,"C",_rut_valido(2))
+        Equipo.objects.filter(pk__in=[primero.pk,segundo.pk]).update(estado="espera")
+        response=self._admin().patch("/api/admin/torneos/test/",{"cupo_equipos":2},format="json")
+        primero.refresh_from_db(); segundo.refresh_from_db()
+        self.assertEqual(response.status_code,200); self.assertEqual(response.data["equipos_promovidos"],[{"id":primero.pk,"nombre":"B"}])
+        self.assertEqual(primero.estado,"confirmado"); self.assertEqual(segundo.estado,"espera")
+
+    def test_reducir_cupo_bajo_confirmados_es_rechazado(self):
+        t=tournament(3); team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1))
+        response=self._admin().patch("/api/admin/torneos/test/",{"cupo_equipos":1},format="json")
+        self.assertEqual(response.status_code,400); self.assertIn("2 equipos confirmados",response.data["detail"])
+
+    def test_cambiar_cupo_con_llave_publicada_es_rechazado(self):
+        t=tournament(); t.llave_publicada=True; t.save()
+        response=self._admin().patch("/api/admin/torneos/test/",{"cupo_equipos":5},format="json")
+        self.assertEqual(response.status_code,400); self.assertIn("llave ya está armada",response.data["detail"])
+
     def test_lista_espera_sin_cupo(self):
         t=tournament(1); team(t,"Uno","12345678-5"); a=attendee("11111111-1","Dos")
         response=APIClient().post("/api/torneos/test/inscripcion/",{"nombre_equipo":"Dos","integrantes":[{"rut":a.rut,"gamertag":"dos"}]},format="json")

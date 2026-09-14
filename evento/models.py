@@ -4,6 +4,31 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from .validators import validar_rut
 
+def completos_por_defecto():
+    # Se resuelve en tiempo de ejecución para que los asistentes nuevos conserven
+    # el valor vigente, sin modificar los registros históricos.
+    return ConfiguracionEvento.obtener().completos_por_asistente
+
+class ConfiguracionEvento(models.Model):
+    cupo_asistentes=models.PositiveSmallIntegerField(default=120)
+    registro_abierto=models.BooleanField(default=True)
+    completos_por_asistente=models.PositiveSmallIntegerField(default=2)
+    mensaje_cupos_agotados=models.TextField(blank=True,default="")
+
+    @classmethod
+    def obtener(cls):
+        instance,_=cls.objects.get_or_create(pk=1)
+        return instance
+
+    def save(self,*args,**kwargs):
+        self.pk=1
+        return super().save(*args,**kwargs)
+
+    def delete(self,*args,**kwargs):
+        return None
+
+    def __str__(self): return "Configuración del evento"
+
 class Area(models.Model):
     nombre=models.CharField(max_length=120)
     slug=models.SlugField(unique=True)
@@ -33,7 +58,7 @@ class Asistente(models.Model):
     carrera=models.ForeignKey(Carrera,null=True,blank=True,on_delete=models.PROTECT)
     aporte=models.CharField(max_length=15,choices=APORTES,default="ninguno")
     codigo=models.CharField(max_length=12,unique=True,db_index=True,blank=True)
-    completos_asignados=models.PositiveSmallIntegerField(default=2)
+    completos_asignados=models.PositiveSmallIntegerField(default=completos_por_defecto)
     completos_retirados=models.PositiveSmallIntegerField(default=0)
     creado_en=models.DateTimeField(auto_now_add=True)
     @property

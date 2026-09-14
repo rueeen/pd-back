@@ -1,5 +1,11 @@
 from django.contrib import admin
-from .models import Area, Asistente, Carrera, RetiroCompleto
+from .models import Area, Asistente, Carrera, ConfiguracionEvento, RetiroCompleto
+
+@admin.register(ConfiguracionEvento)
+class ConfiguracionEventoAdmin(admin.ModelAdmin):
+    def has_add_permission(self,request):
+        return not ConfiguracionEvento.objects.exists()
+    def has_delete_permission(self,request,obj=None): return False
 @admin.register(Area)
 class AreaAdmin(admin.ModelAdmin):
     list_display=["nombre","slug","orden","activa"]

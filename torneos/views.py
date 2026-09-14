@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+import math
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -56,12 +57,46 @@ class BracketView(APIView):
 class TorneoAdminView(APIView):
     permission_classes=[IsAuthenticated]
     def get(self,r,slug): return Response(_datos_bracket(get_object_or_404(Torneo,slug=slug),admin=True))
+    @transaction.atomic
     def patch(self,r,slug):
-        torneo=get_object_or_404(Torneo,slug=slug)
-        if "llave_publicada" not in r.data or not isinstance(r.data["llave_publicada"],bool):
-            raise ValidationError({"llave_publicada":"Debe indicar un booleano."})
-        torneo.llave_publicada=r.data["llave_publicada"]; torneo.save(update_fields=["llave_publicada"])
-        return Response({"slug":torneo.slug,"llave_publicada":torneo.llave_publicada})
+        torneo=get_object_or_404(Torneo.objects.select_for_update(),slug=slug)
+        fields=[]; promovidos=[]
+        if "llave_publicada" in r.data:
+            if not isinstance(r.data["llave_publicada"],bool):
+                raise ValidationError({"llave_publicada":"Debe indicar un booleano."})
+            torneo.llave_publicada=r.data["llave_publicada"]; fields.append("llave_publicada")
+        if "cierre_inscripciones" in r.data:
+            from django.utils.dateparse import parse_datetime
+            cierre=parse_datetime(str(r.data["cierre_inscripciones"]))
+            if cierre is None: raise ValidationError({"cierre_inscripciones":"Ingrese una fecha y hora válidas."})
+            if timezone.is_naive(cierre): cierre=timezone.make_aware(cierre)
+            torneo.cierre_inscripciones=cierre; fields.append("cierre_inscripciones")
+        if "cupo_equipos" in r.data:
+            if torneo.llave_publicada:
+                return Response({"detail":"La llave ya está armada. Vuelve llave_publicada a falso y sortea de nuevo antes de cambiar el cupo."},status=400)
+            try: nuevo=int(r.data["cupo_equipos"])
+            except (TypeError,ValueError): raise ValidationError({"cupo_equipos":"Debe ser un entero positivo."})
+            if nuevo < 1: raise ValidationError({"cupo_equipos":"Debe ser un entero positivo."})
+            confirmados=torneo.equipos.filter(estado="confirmado").count()
+            if nuevo < confirmados:
+                return Response({"detail":f"Hay {confirmados} equipos confirmados; primero debes dar de baja los que correspondan antes de reducir el cupo."},status=400)
+            anterior=torneo.cupo_equipos; torneo.cupo_equipos=nuevo; fields.append("cupo_equipos")
+            if nuevo>anterior:
+                espera=list(torneo.equipos.select_for_update().filter(estado="espera").order_by("creado_en","pk")[:nuevo-confirmados])
+                for equipo in espera:
+                    equipo.estado="confirmado"; equipo.save(update_fields=["estado"])
+                    PromocionEspera.objects.create(torneo=torneo,equipo=equipo)
+                    promovidos.append({"id":equipo.pk,"nombre":equipo.nombre})
+        if not fields: raise ValidationError("Debe indicar cupo_equipos, cierre_inscripciones o llave_publicada.")
+        torneo.save(update_fields=list(dict.fromkeys(fields)))
+        data={"slug":torneo.slug,"cupo_equipos":torneo.cupo_equipos,"cierre_inscripciones":torneo.cierre_inscripciones,
+              "llave_publicada":torneo.llave_publicada,"equipos_promovidos":promovidos}
+        if "cupo_equipos" in r.data and torneo.modalidad=="equipo":
+            potencia=2**int(math.floor(math.log2(torneo.cupo_equipos)))
+            primera=torneo.cupo_equipos if potencia==torneo.cupo_equipos else 2*(torneo.cupo_equipos-potencia)
+            if primera*torneo.jugadores_por_equipo>20:
+                data["advertencia"]="La primera ronda excede las 20 estaciones simultáneas disponibles y el bloque horario asignado."
+        return Response(data)
 class SorteoView(APIView):
     permission_classes=[IsAuthenticated]
     def post(self,r,slug):
