@@ -73,3 +73,50 @@ def test_endpoint_admin_torneo_requiere_auth_y_cumple_contrato():
     response=client.get("/api/admin/torneos/test/")
     assert response.status_code==200
     assert set(response.data)=={"torneo","slug","estado","horario","equipos_confirmados","equipos_espera","rondas"}
+
+@pytest.mark.django_db
+def test_acreditar_y_sortear_solo_equipos_acreditados():
+    t=tournament(); teams=[team(t,chr(65+i),_rut_valido(i)) for i in range(3)]
+    user=get_user_model().objects.create_user("admin"); client=APIClient(); client.force_authenticate(user)
+    for equipo in teams[:2]:
+        response=client.patch(f"/api/admin/equipos/{equipo.pk}/",{"acreditado":True},format="json")
+        assert response.status_code==200
+        equipo.refresh_from_db(); assert equipo.acreditado is True; assert equipo.acreditado_en is not None
+    with patch("torneos.services.random.shuffle",lambda x:None):
+        response=client.post("/api/admin/torneos/test/sorteo/",{"solo_acreditados":True},format="json")
+    assert response.status_code==200
+    assert set(t.partidas.values_list("equipo_a_id",flat=True)) | set(t.partidas.values_list("equipo_b_id",flat=True)) >= {teams[0].pk,teams[1].pk}
+    assert not t.partidas.filter(equipo_a=teams[2]).exists()
+    assert not t.partidas.filter(equipo_b=teams[2]).exists()
+
+@pytest.mark.django_db
+def test_sorteo_rechaza_menos_de_dos_acreditados_con_recuento():
+    t=tournament(); acreditado=team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1)); acreditado.acreditado=True; acreditado.save()
+    user=get_user_model().objects.create_user("admin"); client=APIClient(); client.force_authenticate(user)
+    response=client.post("/api/admin/torneos/test/sorteo/",{"solo_acreditados":True},format="json")
+    assert response.status_code==400
+    assert "1 equipos acreditados de 2 inscritos" in response.data["detail"]
+
+@pytest.mark.django_db
+def test_walkover_finaliza_y_propaga_ganador():
+    t=tournament()
+    for i in range(4): team(t,chr(65+i),_rut_valido(i))
+    with patch("torneos.services.random.shuffle",lambda x:None): generar_bracket(t)
+    partida=t.partidas.get(ronda=1,orden=0); user=get_user_model().objects.create_user("admin")
+    client=APIClient(); client.force_authenticate(user)
+    response=client.patch(f"/api/admin/partidas/{partida.pk}/resultado/",{"walkover":"b"},format="json")
+    assert response.status_code==200
+    partida.refresh_from_db(); siguiente=partida.siguiente_partida; siguiente.refresh_from_db()
+    assert partida.por_walkover is True
+    assert (partida.score_a,partida.score_b)==(0,0)
+    assert partida.ganador==partida.equipo_b
+    assert siguiente.equipo_a==partida.equipo_b
+
+@pytest.mark.django_db
+def test_walkover_y_marcadores_son_excluyentes():
+    t=tournament(); team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1)); generar_bracket(t)
+    partida=t.partidas.get(); user=get_user_model().objects.create_user("admin")
+    client=APIClient(); client.force_authenticate(user)
+    response=client.patch(f"/api/admin/partidas/{partida.pk}/resultado/",{"walkover":"a","score_a":1,"score_b":0},format="json")
+    assert response.status_code==400
+    partida.refresh_from_db(); assert partida.estado=="pendiente"

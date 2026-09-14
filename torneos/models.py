@@ -20,7 +20,8 @@ class Equipo(models.Model):
     ESTADOS=[(x,x.title()) for x in ("confirmado","espera","retirado")]
     torneo=models.ForeignKey(Torneo,on_delete=models.CASCADE,related_name="equipos"); nombre=models.CharField(max_length=80)
     capitan=models.ForeignKey(Asistente,on_delete=models.PROTECT,related_name="capitanias"); estado=models.CharField(max_length=12,choices=ESTADOS)
-    seed=models.PositiveSmallIntegerField(null=True,blank=True); creado_en=models.DateTimeField(auto_now_add=True)
+    seed=models.PositiveSmallIntegerField(null=True,blank=True); acreditado=models.BooleanField(default=False)
+    acreditado_en=models.DateTimeField(null=True,blank=True); creado_en=models.DateTimeField(auto_now_add=True)
     class Meta: unique_together=[("torneo","nombre")]
     def __str__(self): return f"{self.nombre} — {self.torneo}"
 class Integrante(models.Model):
@@ -37,6 +38,7 @@ class Partida(models.Model):
     equipo_b=models.ForeignKey(Equipo,on_delete=models.SET_NULL,null=True,blank=True,related_name="+")
     score_a=models.PositiveSmallIntegerField(default=0); score_b=models.PositiveSmallIntegerField(default=0)
     ganador=models.ForeignKey(Equipo,on_delete=models.SET_NULL,null=True,blank=True,related_name="victorias")
+    por_walkover=models.BooleanField(default=False)
     estado=models.CharField(max_length=12,choices=ESTADOS,default="pendiente")
     siguiente_partida=models.ForeignKey("self",on_delete=models.SET_NULL,null=True,blank=True,related_name="origen")
     slot_siguiente=models.CharField(max_length=1,choices=SLOTS,null=True,blank=True)

@@ -43,11 +43,15 @@ def _resolver_byes_en_cascada(created):
                 cambio=True
 
 @transaction.atomic
-def generar_bracket(torneo):
+def generar_bracket(torneo,solo_acreditados=False):
     torneo=Torneo.objects.select_for_update().get(pk=torneo.pk)
     if torneo.estado=="finalizado": raise ValidationError("No se puede sortear un torneo finalizado.")
-    teams=list(torneo.equipos.filter(estado="confirmado"))
-    if len(teams)<2: raise ValidationError("Se requieren al menos 2 equipos confirmados.")
+    confirmados=torneo.equipos.filter(estado="confirmado")
+    teams=list(confirmados.filter(acreditado=True) if solo_acreditados else confirmados)
+    if len(teams)<2:
+        if solo_acreditados:
+            raise ValidationError(f"Hay {len(teams)} equipos acreditados de {confirmados.count()} inscritos; se requieren al menos 2 para sortear.")
+        raise ValidationError("Se requieren al menos 2 equipos confirmados.")
     torneo.partidas.all().delete(); random.shuffle(teams)
     for seed,team in enumerate(teams,1): team.seed=seed; team.save(update_fields=["seed"])
     size=2**math.ceil(math.log2(len(teams)))
@@ -83,20 +87,23 @@ def _limpiar_desde(partida,old_winner):
         old=current.ganador
         if current.equipo_a_id==getattr(old_winner,"id",None): current.equipo_a=None
         if current.equipo_b_id==getattr(old_winner,"id",None): current.equipo_b=None
-        current.ganador=None; current.score_a=current.score_b=0; current.estado="pendiente"; current.save()
+        current.ganador=None; current.score_a=current.score_b=0; current.por_walkover=False; current.estado="pendiente"; current.save()
         old_winner=old; current=current.siguiente_partida
 
 @transaction.atomic
-def registrar_resultado(partida,score_a,score_b,usuario=None,reabrir=False):
+def registrar_resultado(partida,score_a=0,score_b=0,usuario=None,reabrir=False,walkover=None):
     partida=Partida.objects.select_for_update().select_related("torneo").get(pk=partida.pk)
     if partida.torneo.estado=="finalizado" and not reabrir:
         raise ValidationError("El torneo está finalizado; debe reabrirlo explícitamente para corregir resultados.")
     if not partida.equipo_a or not partida.equipo_b: raise ValidationError("La partida debe tener ambos equipos definidos.")
-    if score_a==score_b: raise ValidationError("El resultado no puede ser empate.")
+    if walkover not in (None,"a","b"): raise ValidationError("walkover debe ser 'a' o 'b'.")
+    if walkover is None and score_a==score_b: raise ValidationError("El resultado no puede ser empate.")
     if score_a<0 or score_b<0: raise ValidationError("Los marcadores no pueden ser negativos.")
-    old=partida.ganador; winner=partida.equipo_a if score_a>score_b else partida.equipo_b
+    old=partida.ganador
+    winner=(partida.equipo_a if walkover=="a" else partida.equipo_b) if walkover else (partida.equipo_a if score_a>score_b else partida.equipo_b)
     if old and old != winner: _limpiar_desde(partida,old)
-    partida.score_a=score_a; partida.score_b=score_b; partida.ganador=winner; partida.estado="finalizada"; partida.save()
+    partida.score_a=0 if walkover else score_a; partida.score_b=0 if walkover else score_b
+    partida.por_walkover=bool(walkover); partida.ganador=winner; partida.estado="finalizada"; partida.save()
     if partida.siguiente_partida:
         _colocar(partida,winner)
         if partida.torneo.estado in ("sorteado","finalizado"):
