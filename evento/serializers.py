@@ -1,14 +1,37 @@
 from rest_framework import serializers
-from .models import Asistente, RetiroCompleto
+from .models import Area, Asistente, Carrera, RetiroCompleto
 from .validators import enmascarar_rut, validar_rut
 
 class AsistenteSerializer(serializers.ModelSerializer):
+    area=serializers.SlugRelatedField(slug_field="slug",queryset=Area.objects.filter(activa=True),allow_null=True,required=False)
+    carrera=serializers.SlugRelatedField(slug_field="slug",queryset=Carrera.objects.filter(activa=True),allow_null=True,required=False)
+    area_nombre=serializers.CharField(source="area.nombre",read_only=True,allow_null=True)
+    carrera_nombre=serializers.CharField(source="carrera.nombre",read_only=True,allow_null=True)
     completos_disponibles=serializers.IntegerField(read_only=True)
     class Meta:
         model=Asistente
-        fields=["nombre","apellido","rut","email","telefono","tipo","area","carrera","aporte","codigo","completos_asignados","completos_retirados","completos_disponibles","creado_en"]
+        fields=["nombre","apellido","rut","email","telefono","tipo","area","area_nombre","carrera","carrera_nombre","aporte","codigo","completos_asignados","completos_retirados","completos_disponibles","creado_en"]
         read_only_fields=["codigo","completos_asignados","completos_retirados","creado_en"]
     def validate_rut(self,value): return validar_rut(value)
+    def validate(self,attrs):
+        tipo=attrs.get("tipo",getattr(self.instance,"tipo",None))
+        area=attrs.get("area",getattr(self.instance,"area",None))
+        carrera=attrs.get("carrera",getattr(self.instance,"carrera",None))
+        errors={}
+        if tipo == "estudiante":
+            if area is None: errors["area"]="Este campo es obligatorio para estudiantes."
+            if carrera is None: errors["carrera"]="Este campo es obligatorio para estudiantes."
+        if carrera is not None and (area is None or carrera.area_id != area.id):
+            errors["carrera"]="Esta carrera no corresponde al área seleccionada."
+        if errors: raise serializers.ValidationError(errors)
+        return attrs
+
+class CarreraCatalogoSerializer(serializers.ModelSerializer):
+    class Meta: model=Carrera; fields=["slug","nombre"]
+
+class AreaCatalogoSerializer(serializers.ModelSerializer):
+    carreras=CarreraCatalogoSerializer(source="carreras_activas",many=True,read_only=True)
+    class Meta: model=Area; fields=["slug","nombre","carreras"]
 
 class PaseSerializer(serializers.ModelSerializer):
     rut=serializers.SerializerMethodField(); completos_disponibles=serializers.IntegerField(read_only=True)

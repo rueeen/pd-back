@@ -1,5 +1,15 @@
 from django.contrib import admin
-from .models import Asistente, RetiroCompleto
+from .models import Area, Asistente, Carrera, RetiroCompleto
+@admin.register(Area)
+class AreaAdmin(admin.ModelAdmin):
+    list_display=["nombre","slug","orden","activa"]
+    search_fields=["nombre","slug"]
+    list_filter=["activa"]
+@admin.register(Carrera)
+class CarreraAdmin(admin.ModelAdmin):
+    list_display=["nombre","area","slug","activa"]
+    search_fields=["nombre","slug","area__nombre"]
+    list_filter=["area","activa"]
 @admin.register(Asistente)
 class AsistenteAdmin(admin.ModelAdmin):
     list_display=["nombre","apellido","rut","codigo","tipo","aporte","completos_retirados"]; search_fields=["nombre","apellido","rut","codigo"]; list_filter=["tipo","area","aporte"]

@@ -1,17 +1,25 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Count, F, Q, Sum
+from django.db.models import Count, F, Prefetch, Q, Sum
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
-from .models import Asistente, RetiroCompleto
-from .serializers import AsistenteSerializer, PaseSerializer, RetiroSerializer
+from .models import Area, Asistente, Carrera, RetiroCompleto
+from .serializers import AreaCatalogoSerializer, AsistenteSerializer, PaseSerializer, RetiroSerializer
 from .services import registrar_retiro
 from .validators import normalizar_rut
 
 class RegistrationThrottle(AnonRateThrottle): scope="registration"
+class CatalogoAreasView(APIView):
+    permission_classes=[AllowAny]
+    throttle_classes=[]
+    def get(self,request):
+        qs=Area.objects.filter(activa=True).prefetch_related(
+            Prefetch("carreras",queryset=Carrera.objects.filter(activa=True),to_attr="carreras_activas")
+        )
+        return Response(AreaCatalogoSerializer(qs,many=True).data)
 class RegistroView(APIView):
     permission_classes=[AllowAny]; throttle_classes=[RegistrationThrottle]
     def post(self,request):
@@ -56,4 +64,6 @@ class AdminResumenView(APIView):
     permission_classes=[IsAuthenticated]
     def get(self,request):
         from torneos.models import Torneo
-        return Response({"total_registrados":Asistente.objects.count(),"completos_entregados":RetiroCompleto.objects.aggregate(v=Sum("cantidad"))["v"] or 0,"completos_pendientes":Asistente.objects.aggregate(v=Sum(F("completos_asignados")-F("completos_retirados")))["v"] or 0,"inscritos_por_torneo":[{"slug":t.slug,"nombre":t.nombre,"inscritos":t.equipos.filter(estado="confirmado").count()} for t in Torneo.objects.all()],"aportes_comprometidos":{x["aporte"]:x["total"] for x in Asistente.objects.values("aporte").annotate(total=Count("id"))}})
+        areas=Area.objects.annotate(total=Count("asistente")).filter(total__gt=0).order_by("-total","orden","nombre")
+        carreras=Carrera.objects.annotate(total=Count("asistente")).filter(total__gt=0).select_related("area").order_by("-total","nombre")
+        return Response({"total_registrados":Asistente.objects.count(),"completos_entregados":RetiroCompleto.objects.aggregate(v=Sum("cantidad"))["v"] or 0,"completos_pendientes":Asistente.objects.aggregate(v=Sum(F("completos_asignados")-F("completos_retirados")))["v"] or 0,"inscritos_por_torneo":[{"slug":t.slug,"nombre":t.nombre,"inscritos":t.equipos.filter(estado="confirmado").count()} for t in Torneo.objects.all()],"aportes_comprometidos":{x["aporte"]:x["total"] for x in Asistente.objects.values("aporte").annotate(total=Count("id"))},"asistentes_por_area":[{"slug":x.slug,"nombre":x.nombre,"total":x.total} for x in areas],"asistentes_por_carrera":[{"slug":x.slug,"nombre":x.nombre,"area":x.area.slug,"total":x.total} for x in carreras]})
