@@ -11,7 +11,6 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-set -a; source .env; set +a
 python manage.py migrate
 python manage.py cargar_torneos
 python manage.py createsuperuser
@@ -22,7 +21,7 @@ La API vive bajo \`/api/\`; el admin de respaldo está en \`/admin-site/\`. Los 
 
 ## Variables
 
-\`SECRET_KEY\`, \`DEBUG\`, \`ALLOWED_HOSTS\` y \`CORS_ALLOWED_ORIGINS\` configuran seguridad y frontend. SQLite es el valor predeterminado. Para MySQL defina \`DATABASE_ENGINE=mysql\` y todas las variables \`DATABASE_*\` mostradas en \`.env.example\`.
+\`SECRET_KEY\`, \`DEBUG\`, \`ALLOWED_HOSTS\` y \`CORS_ALLOWED_ORIGINS\` configuran seguridad y frontend. La aplicación carga automáticamente estas variables desde \`.env\` mediante \`python-dotenv\`; las variables de entorno reales tienen precedencia. SQLite es el valor predeterminado. Para MySQL defina \`DATABASE_ENGINE=mysql\` y todas las variables \`DATABASE_*\` mostradas en \`.env.example\`.
 
 ## PythonAnywhere
 
@@ -32,6 +31,12 @@ La API vive bajo \`/api/\`; el admin de respaldo está en \`/admin-site/\`. Los 
 4. Ajuste el archivo WSGI para añadir el repositorio a \`sys.path\` y cargar \`config.wsgi.application\`.
 5. Ejecute \`python manage.py migrate\`, \`python manage.py cargar_torneos\`, \`python manage.py createsuperuser\` y \`python manage.py collectstatic --noinput\`.
 6. Configure los archivos estáticos en el panel Web y recargue la aplicación.
+
+Siempre que cambien dependencias o archivos estáticos, recopile los recursos del admin con:
+
+\`\`\`bash
+python manage.py collectstatic --noinput
+\`\`\`
 
 ## Pruebas
 

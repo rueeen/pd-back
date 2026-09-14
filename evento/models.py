@@ -1,8 +1,8 @@
 import secrets
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import IntegrityError, models
-from .validators import normalizar_rut, validar_rut
+from django.db import models
+from .validators import validar_rut
 
 class Asistente(models.Model):
     TIPOS = [(x,x.title()) for x in ("estudiante","docente","funcionario","externo")]
@@ -23,10 +23,10 @@ class Asistente(models.Model):
         self.rut=validar_rut(self.rut)
         if self.codigo: return super().save(*args,**kwargs)
         for _ in range(20):
-            self.codigo="".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(10))
-            try: return super().save(*args,**kwargs)
-            except IntegrityError:
-                self.codigo=""
+            candidato="".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(10))
+            if not Asistente.objects.filter(codigo=candidato).exists():
+                self.codigo=candidato
+                return super().save(*args,**kwargs)
         raise RuntimeError("No se pudo generar un código único.")
     def __str__(self): return f"{self.nombre} {self.apellido} ({self.rut})"
 

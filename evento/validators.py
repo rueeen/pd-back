@@ -25,5 +25,5 @@ def validar_rut(value):
 def enmascarar_rut(value):
     body, dv = normalizar_rut(value).split("-")
     visible = body[:2]
-    masked = visible + "." + "".join("X" if i else d for i, d in enumerate(body[2:]))
+    masked = visible + "." + "X" * len(body[2:])
     return f"{masked}-{dv}"
