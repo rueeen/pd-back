@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import Asistente, RetiroCompleto
-from .validators import enmascarar_rut, normalizar_rut, validar_rut
+from .validators import enmascarar_rut, validar_rut
 
 class AsistenteSerializer(serializers.ModelSerializer):
     completos_disponibles=serializers.IntegerField(read_only=True)
@@ -21,5 +21,7 @@ class PaseSerializer(serializers.ModelSerializer):
         return [{"slug":x.equipo.torneo.slug,"nombre":x.equipo.torneo.nombre,"equipo":x.equipo.nombre} for x in obj.participaciones.select_related("equipo__torneo")]
 
 class RetiroSerializer(serializers.ModelSerializer):
-    asistente=AsistenteSerializer(read_only=True); validado_por=serializers.StringRelatedField()
+    asistente=serializers.SerializerMethodField(); validado_por=serializers.StringRelatedField()
     class Meta: model=RetiroCompleto; fields=["id","asistente","cantidad","validado_por","creado_en"]
+    def get_asistente(self,obj):
+        return {"nombre":obj.asistente.nombre,"apellido":obj.asistente.apellido,"codigo":obj.asistente.codigo}

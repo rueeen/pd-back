@@ -1,4 +1,5 @@
-from django.db import transaction
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 from evento.models import Asistente
 from evento.validators import normalizar_rut
@@ -23,23 +24,31 @@ class InscripcionSerializer(serializers.Serializer):
     def validate(self,data):
         torneo=self.context["torneo"]
         if not torneo.inscripciones_abiertas: raise serializers.ValidationError("Las inscripciones no están abiertas.")
+        data["nombre_equipo"]=data["nombre_equipo"].strip()
+        if Equipo.objects.filter(torneo=torneo,nombre__iexact=data["nombre_equipo"]).exists():
+            raise serializers.ValidationError({"nombre_equipo":"el nombre ya está tomado en ese torneo, elige otro."})
         if len(data["integrantes"])!=torneo.jugadores_por_equipo: raise serializers.ValidationError(f"Se requieren exactamente {torneo.jugadores_por_equipo} integrantes.")
         attendees=[]; seen=set()
         for member in data["integrantes"]:
             try: rut=normalizar_rut(member.get("rut",""))
-            except Exception: raise serializers.ValidationError(f"RUT {member.get('rut','')} inválido.")
+            except DjangoValidationError: raise serializers.ValidationError(f"RUT {member.get('rut','')} inválido.")
             attendee=Asistente.objects.filter(rut=rut).first()
             if not attendee: raise serializers.ValidationError(f"El RUT {rut} no está registrado; debe registrarse primero al evento.")
-            if attendee.pk in seen or Integrante.objects.filter(equipo__torneo=torneo,asistente=attendee).exists(): raise serializers.ValidationError(f"El asistente con RUT {rut} ya participa en un equipo de este torneo.")
+            if attendee.pk in seen or Integrante.objects.filter(equipo__torneo=torneo,asistente=attendee).exclude(equipo__estado="retirado").exists(): raise serializers.ValidationError(f"El asistente con RUT {rut} ya participa en un equipo de este torneo.")
             seen.add(attendee.pk); attendees.append((attendee,member.get("gamertag","")))
         data["attendees"]=attendees; return data
     @transaction.atomic
     def create(self,data):
         torneo=Torneo.objects.select_for_update().get(pk=self.context["torneo"].pk)
         state="confirmado" if torneo.cupos_disponibles>0 else "espera"
-        equipo=Equipo.objects.create(torneo=torneo,nombre=data["nombre_equipo"],capitan=data["attendees"][0][0],estado=state)
+        try:
+            equipo=Equipo.objects.create(torneo=torneo,nombre=data["nombre_equipo"],capitan=data["attendees"][0][0],estado=state)
+        except IntegrityError:
+            raise serializers.ValidationError({"nombre_equipo":"el nombre ya está tomado en ese torneo, elige otro."})
         Integrante.objects.bulk_create([Integrante(equipo=equipo,asistente=a,gamertag=g) for a,g in data["attendees"]])
         return equipo
 class PartidaSerializer(serializers.ModelSerializer):
     equipo_a=EquipoPublicoSerializer(read_only=True); equipo_b=EquipoPublicoSerializer(read_only=True); ganador=EquipoPublicoSerializer(read_only=True)
-    class Meta: model=Partida; fields=["id","ronda","orden","equipo_a","equipo_b","score_a","score_b","ganador","estado","siguiente_partida","slot_siguiente"]
+    bye=serializers.SerializerMethodField()
+    class Meta: model=Partida; fields=["id","ronda","orden","equipo_a","equipo_b","score_a","score_b","ganador","estado","siguiente_partida","slot_siguiente","bye"]
+    def get_bye(self,obj): return obj.estado=="finalizada" and bool(obj.ganador_id) and not (obj.equipo_a_id and obj.equipo_b_id)

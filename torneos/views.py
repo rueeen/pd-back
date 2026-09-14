@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
@@ -7,6 +8,22 @@ from rest_framework.views import APIView
 from .models import Equipo, Partida, Torneo
 from .serializers import *
 from .services import generar_bracket, registrar_resultado
+
+def _nombre_ronda(numero,total):
+    distancia=total-numero
+    if distancia==0: return "Final"
+    if distancia==1: return "Semifinal"
+    if distancia==2: return "Cuartos de final"
+    return f"Ronda {numero}"
+
+def _datos_bracket(torneo):
+    matches=PartidaSerializer(torneo.partidas.all(),many=True).data
+    rondas=sorted({x["ronda"] for x in matches}); total=max(rondas,default=0)
+    equipos=lambda estado: list(torneo.equipos.filter(estado=estado).values("id","nombre"))
+    return {"torneo":torneo.nombre,"slug":torneo.slug,"estado":torneo.estado,
+            "horario":f"{torneo.hora_inicio:%H:%M} – {torneo.hora_fin:%H:%M}",
+            "equipos_confirmados":equipos("confirmado"),"equipos_espera":equipos("espera"),
+            "rondas":[{"ronda":n,"nombre":_nombre_ronda(n,total),"partidas":[x for x in matches if x["ronda"]==n]} for n in rondas]}
 class TorneosView(APIView):
     permission_classes=[AllowAny]
     def get(self,r): return Response(TorneoSerializer(Torneo.objects.all(),many=True).data)
@@ -23,20 +40,22 @@ class InscripcionView(APIView):
 class BracketView(APIView):
     permission_classes=[AllowAny]
     def get(self,r,slug):
-        t=get_object_or_404(Torneo,slug=slug); matches=PartidaSerializer(t.partidas.all(),many=True).data
-        return Response({"torneo":t.nombre,"rondas":[{"ronda":n,"partidas":[x for x in matches if x["ronda"]==n]} for n in sorted({x["ronda"] for x in matches})]})
+        return Response(_datos_bracket(get_object_or_404(Torneo,slug=slug)))
+class TorneoAdminView(APIView):
+    permission_classes=[IsAuthenticated]
+    def get(self,r,slug): return Response(_datos_bracket(get_object_or_404(Torneo,slug=slug)))
 class SorteoView(APIView):
     permission_classes=[IsAuthenticated]
     def post(self,r,slug):
         try: t=generar_bracket(get_object_or_404(Torneo,slug=slug))
-        except Exception as e: raise ValidationError(e.messages if hasattr(e,"messages") else str(e))
+        except DjangoValidationError as e: raise ValidationError(e.messages)
         return Response({"estado":t.estado,"partidas":t.partidas.count()})
 class ResultadoView(APIView):
     permission_classes=[IsAuthenticated]
     def patch(self,r,pk):
-        try: p=registrar_resultado(get_object_or_404(Partida,pk=pk),int(r.data["score_a"]),int(r.data["score_b"]),r.user)
+        try: p=registrar_resultado(get_object_or_404(Partida,pk=pk),int(r.data["score_a"]),int(r.data["score_b"]),r.user,reabrir=r.data.get("reabrir") is True)
         except (KeyError,TypeError,ValueError): raise ValidationError("score_a y score_b deben ser enteros.")
-        except Exception as e: raise ValidationError(e.messages if hasattr(e,"messages") else str(e))
+        except DjangoValidationError as e: raise ValidationError(e.messages)
         return Response(PartidaSerializer(p).data)
 class EquipoAdminView(APIView):
     permission_classes=[IsAuthenticated]
