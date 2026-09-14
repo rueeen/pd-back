@@ -12,6 +12,17 @@ class IntegrantePublicoSerializer(serializers.ModelSerializer):
 class EquipoPublicoSerializer(serializers.ModelSerializer):
     integrantes=IntegrantePublicoSerializer(many=True,read_only=True)
     class Meta: model=Equipo; fields=["id","nombre","integrantes","seed"]
+class AsistenteAdminSerializer(serializers.ModelSerializer):
+    class Meta: model=Asistente; fields=["nombre","apellido","codigo"]
+class IntegranteAdminSerializer(serializers.ModelSerializer):
+    nombre=serializers.CharField(source="asistente.nombre",read_only=True)
+    apellido=serializers.CharField(source="asistente.apellido",read_only=True)
+    codigo=serializers.CharField(source="asistente.codigo",read_only=True)
+    class Meta: model=Integrante; fields=["nombre","apellido","codigo","gamertag"]
+class EquipoAdminSerializer(serializers.ModelSerializer):
+    capitan=AsistenteAdminSerializer(read_only=True)
+    integrantes=IntegranteAdminSerializer(many=True,read_only=True)
+    class Meta: model=Equipo; fields=["id","nombre","acreditado","capitan","integrantes"]
 class TorneoSerializer(serializers.ModelSerializer):
     equipos_confirmados=serializers.IntegerField(read_only=True); cupos_disponibles=serializers.IntegerField(read_only=True); inscripciones_abiertas=serializers.BooleanField(read_only=True)
     class Meta: model=Torneo; fields=["nombre","slug","juego","modalidad","jugadores_por_equipo","cupo_equipos","estado","hora_inicio","hora_fin","reglas","cierre_inscripciones","equipos_confirmados","cupos_disponibles","inscripciones_abiertas"]
@@ -49,6 +60,7 @@ class InscripcionSerializer(serializers.Serializer):
         return equipo
 class PartidaSerializer(serializers.ModelSerializer):
     equipo_a=EquipoPublicoSerializer(read_only=True); equipo_b=EquipoPublicoSerializer(read_only=True); ganador=EquipoPublicoSerializer(read_only=True)
-    bye=serializers.SerializerMethodField()
-    class Meta: model=Partida; fields=["id","ronda","orden","equipo_a","equipo_b","score_a","score_b","ganador","estado","siguiente_partida","slot_siguiente","bye"]
+    bye=serializers.SerializerMethodField(); es_final=serializers.SerializerMethodField()
+    class Meta: model=Partida; fields=["id","ronda","orden","equipo_a","equipo_b","score_a","score_b","ganador","estado","por_walkover","siguiente_partida","slot_siguiente","bye","es_final"]
     def get_bye(self,obj): return obj.estado=="finalizada" and bool(obj.ganador_id) and not (obj.equipo_a_id and obj.equipo_b_id)
+    def get_es_final(self,obj): return obj.siguiente_partida_id is None
