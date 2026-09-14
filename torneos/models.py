@@ -4,10 +4,12 @@ from evento.models import Asistente
 
 class Torneo(models.Model):
     MODALIDADES=[("individual","Individual"),("equipo","Equipo")]
-    ESTADOS=[(x,x.replace("_"," ").title()) for x in ("inscripcion","sorteado","en_curso","finalizado")]
+    ESTADOS=[(x,x.replace("_"," ").title()) for x in ("inscripcion","cerrado","sorteado","en_curso","finalizado")]
+    EQUIPAMIENTOS=[("pc","PC"),("consola","Consola")]
     nombre=models.CharField(max_length=120); slug=models.SlugField(unique=True); juego=models.CharField(max_length=120)
     modalidad=models.CharField(max_length=10,choices=MODALIDADES); jugadores_por_equipo=models.PositiveSmallIntegerField()
     cupo_equipos=models.PositiveSmallIntegerField(); estado=models.CharField(max_length=15,choices=ESTADOS,default="inscripcion")
+    bloque=models.CharField(max_length=30,blank=True); equipamiento=models.CharField(max_length=10,choices=EQUIPAMIENTOS,default="pc")
     llave_publicada=models.BooleanField(default=False)
     hora_inicio=models.TimeField(); hora_fin=models.TimeField(); reglas=models.TextField(blank=True); cierre_inscripciones=models.DateTimeField()
     @property

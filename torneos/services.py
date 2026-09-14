@@ -45,7 +45,8 @@ def _resolver_byes_en_cascada(created):
 @transaction.atomic
 def generar_bracket(torneo,solo_acreditados=False):
     torneo=Torneo.objects.select_for_update().get(pk=torneo.pk)
-    if torneo.estado=="finalizado": raise ValidationError("No se puede sortear un torneo finalizado.")
+    if torneo.estado=="inscripcion": raise ValidationError("Primero debes cerrar las inscripciones antes de sortear.")
+    if torneo.estado!="cerrado": raise ValidationError("Solo se puede sortear un torneo con las inscripciones cerradas.")
     confirmados=torneo.equipos.filter(estado="confirmado")
     teams=list(confirmados.filter(acreditado=True) if solo_acreditados else confirmados)
     if len(teams)<2:
