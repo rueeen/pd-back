@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Area, Asistente, Carrera, RetiroCompleto
+from .models import Area, Asistente, Carrera, ConfiguracionEvento, RetiroCompleto
 from .validators import enmascarar_rut, validar_rut
 
 class AsistenteSerializer(serializers.ModelSerializer):
@@ -57,3 +57,9 @@ class RetiroSerializer(serializers.ModelSerializer):
     class Meta: model=RetiroCompleto; fields=["id","asistente","cantidad","validado_por","creado_en"]
     def get_asistente(self,obj):
         return {"nombre":obj.asistente.nombre,"apellido":obj.asistente.apellido,"codigo":obj.asistente.codigo}
+
+class ConfiguracionEventoSerializer(serializers.ModelSerializer):
+    aplicar_a_existentes=serializers.BooleanField(write_only=True,required=False,default=False)
+    class Meta:
+        model=ConfiguracionEvento
+        fields=["cupo_asistentes","registro_abierto","completos_por_asistente","mensaje_cupos_agotados","aplicar_a_existentes"]

@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import TestCase
 from rest_framework.test import APIClient
-from .models import Area, Asistente, Carrera
+from .models import Area, Asistente, Carrera, ConfiguracionEvento
 from .services import registrar_retiro
 from .validators import normalizar_rut, validar_rut
 
@@ -12,6 +12,24 @@ def attendee(rut="12345678-5",name="Ada"):
     return Asistente.objects.create(nombre=name,apellido="Lovelace",rut=rut,email="ada@example.com",tipo="externo")
 
 class EventoTests(TestCase):
+    def test_cupo_rechaza_nuevo_pero_permite_recuperar_existente(self):
+        existing=attendee(); config=ConfiguracionEvento.obtener(); config.cupo_asistentes=1; config.save()
+        client=APIClient()
+        rejected=client.post("/api/asistentes/",{"nombre":"Grace","apellido":"Hopper","rut":"11111111-1","email":"grace@example.com","tipo":"externo"},format="json")
+        recovered=client.post("/api/asistentes/",{"rut":existing.rut,"email":existing.email},format="json")
+        self.assertEqual(rejected.status_code,409)
+        self.assertEqual(recovered.status_code,200)
+        self.assertTrue(recovered.data["recuperado"])
+
+    def test_aplicar_completos_respeta_retiros_superiores(self):
+        protegido=attendee(); protegido.completos_asignados=3; protegido.completos_retirados=2; protegido.save()
+        actualizable=attendee("11111111-1","Grace")
+        user=get_user_model().objects.create_user("admin-config"); client=APIClient(); client.force_authenticate(user)
+        response=client.patch("/api/admin/configuracion/",{"completos_por_asistente":1,"aplicar_a_existentes":True},format="json")
+        protegido.refresh_from_db(); actualizable.refresh_from_db()
+        self.assertEqual(response.status_code,200); self.assertEqual(response.data["sin_actualizar"],1)
+        self.assertEqual(protegido.completos_asignados,3); self.assertEqual(actualizable.completos_asignados,1)
+
     def test_codigo_aleatorio_y_unico(self):
         a=attendee(); b=attendee("11111111-1","Grace")
         self.assertEqual(len(a.codigo),10); self.assertNotEqual(a.codigo,b.codigo)
