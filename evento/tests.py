@@ -32,6 +32,15 @@ class EventoTests(TestCase):
         recovered=client.post("/api/asistentes/",{"rut":a.rut,"email":"ADA@EXAMPLE.COM"},format="json")
         self.assertEqual(recovered.status_code,200); self.assertTrue(recovered.data["recuperado"])
 
+    def test_endpoint_recuperar_pase_no_revela_si_el_rut_existe(self):
+        a=attendee(); client=APIClient()
+        correcto=client.post("/api/pase/recuperar/",{"rut":a.rut,"email":"ADA@EXAMPLE.COM"},format="json")
+        correo_incorrecto=client.post("/api/pase/recuperar/",{"rut":a.rut,"email":"otro@example.com"},format="json")
+        rut_inexistente=client.post("/api/pase/recuperar/",{"rut":"22222222-2","email":"otro@example.com"},format="json")
+        self.assertEqual(correcto.status_code,200); self.assertEqual(correcto.data,{"codigo":a.codigo})
+        self.assertEqual(correo_incorrecto.status_code,404); self.assertEqual(rut_inexistente.status_code,404)
+        self.assertEqual(correo_incorrecto.data,rut_inexistente.data)
+
     def test_retiro_errores_tienen_detail_y_acepta_cantidad_string(self):
         a=attendee(); user=get_user_model().objects.create_user("operator"); client=APIClient(); client.force_authenticate(user)
         ok=client.post("/api/admin/retiros/",{"codigo":a.codigo,"cantidad":"1"},format="json")

@@ -78,7 +78,7 @@ def generar_bracket(torneo,solo_acreditados=False):
             rotas.append(p.pk)
     if rotas:
         raise ValidationError("No se pudo generar un bracket válido.")
-    torneo.estado="sorteado"; torneo.save(update_fields=["estado"])
+    torneo.estado="sorteado"; torneo.llave_publicada=True; torneo.save(update_fields=["estado","llave_publicada"])
     return torneo
 
 def _limpiar_desde(partida,old_winner):

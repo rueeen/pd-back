@@ -41,7 +41,16 @@ class PaseSerializer(serializers.ModelSerializer):
         fields=["nombre","apellido","rut","codigo","completos_asignados","completos_retirados","completos_disponibles","torneos"]
     def get_rut(self,obj): return enmascarar_rut(obj.rut)
     def get_torneos(self,obj):
-        return [{"slug":x.equipo.torneo.slug,"nombre":x.equipo.torneo.nombre,"equipo":x.equipo.nombre} for x in obj.participaciones.select_related("equipo__torneo")]
+        result=[]
+        for participation in obj.participaciones.select_related("equipo__torneo","equipo__capitan").prefetch_related("equipo__integrantes__asistente"):
+            equipo=participation.equipo; torneo=equipo.torneo
+            item={"slug":torneo.slug,"nombre":torneo.nombre,"equipo_id":equipo.pk,"equipo":equipo.nombre,
+                  "estado_equipo":equipo.estado,"posicion_espera":None,"es_capitan":equipo.capitan_id==obj.pk,
+                  "torneo_estado":torneo.estado,"horario":f"{torneo.hora_inicio:%H:%M} – {torneo.hora_fin:%H:%M}",
+                  "integrantes":[{"nombre":x.asistente.nombre,"apellido":x.asistente.apellido,"gamertag":x.gamertag} for x in equipo.integrantes.all()]}
+            if equipo.estado=="espera": item["posicion_espera"]=torneo.equipos.filter(estado="espera",creado_en__lte=equipo.creado_en).count()
+            result.append(item)
+        return result
 
 class RetiroSerializer(serializers.ModelSerializer):
     asistente=serializers.SerializerMethodField(); validado_por=serializers.StringRelatedField()

@@ -8,6 +8,7 @@ class Torneo(models.Model):
     nombre=models.CharField(max_length=120); slug=models.SlugField(unique=True); juego=models.CharField(max_length=120)
     modalidad=models.CharField(max_length=10,choices=MODALIDADES); jugadores_por_equipo=models.PositiveSmallIntegerField()
     cupo_equipos=models.PositiveSmallIntegerField(); estado=models.CharField(max_length=15,choices=ESTADOS,default="inscripcion")
+    llave_publicada=models.BooleanField(default=False)
     hora_inicio=models.TimeField(); hora_fin=models.TimeField(); reglas=models.TextField(blank=True); cierre_inscripciones=models.DateTimeField()
     @property
     def equipos_confirmados(self): return self.equipos.filter(estado="confirmado").count()
@@ -29,6 +30,10 @@ class Integrante(models.Model):
     asistente=models.ForeignKey(Asistente,on_delete=models.PROTECT,related_name="participaciones")
     gamertag=models.CharField(max_length=60,blank=True)
     class Meta: unique_together=[("equipo","asistente")]
+class PromocionEspera(models.Model):
+    torneo=models.ForeignKey(Torneo,on_delete=models.CASCADE,related_name="promociones")
+    equipo=models.ForeignKey(Equipo,on_delete=models.PROTECT,related_name="promociones")
+    creado_en=models.DateTimeField(auto_now_add=True)
 class Partida(models.Model):
     ESTADOS=[(x,x.replace("_"," ").title()) for x in ("pendiente","en_curso","finalizada")]
     SLOTS=[("A","A"),("B","B")]
