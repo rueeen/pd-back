@@ -26,7 +26,7 @@ class InscripcionSerializer(serializers.Serializer):
         if not torneo.inscripciones_abiertas: raise serializers.ValidationError("Las inscripciones no están abiertas.")
         data["nombre_equipo"]=data["nombre_equipo"].strip()
         if Equipo.objects.filter(torneo=torneo,nombre__iexact=data["nombre_equipo"]).exists():
-            raise serializers.ValidationError({"nombre_equipo":"el nombre ya está tomado en ese torneo, elige otro."})
+            raise serializers.ValidationError({"nombre_equipo":"El nombre ya está tomado en ese torneo, elige otro."})
         if len(data["integrantes"])!=torneo.jugadores_por_equipo: raise serializers.ValidationError(f"Se requieren exactamente {torneo.jugadores_por_equipo} integrantes.")
         attendees=[]; seen=set()
         for member in data["integrantes"]:
@@ -44,7 +44,7 @@ class InscripcionSerializer(serializers.Serializer):
         try:
             equipo=Equipo.objects.create(torneo=torneo,nombre=data["nombre_equipo"],capitan=data["attendees"][0][0],estado=state)
         except IntegrityError:
-            raise serializers.ValidationError({"nombre_equipo":"el nombre ya está tomado en ese torneo, elige otro."})
+            raise serializers.ValidationError({"nombre_equipo":"El nombre ya está tomado en ese torneo, elige otro."})
         Integrante.objects.bulk_create([Integrante(equipo=equipo,asistente=a,gamertag=g) for a,g in data["attendees"]])
         return equipo
 class PartidaSerializer(serializers.ModelSerializer):

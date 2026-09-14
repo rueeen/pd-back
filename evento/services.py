@@ -9,6 +9,8 @@ def registrar_retiro(asistente,cantidad,usuario):
     locked=Asistente.objects.select_for_update().get(pk=asistente.pk)
     if cantidad > locked.completos_disponibles:
         disponibles=locked.completos_disponibles
+        if disponibles == 0:
+            raise ValidationError("Ya retiró sus 2 completos.")
         if disponibles == 1:
             raise ValidationError("Solo le queda 1 completo disponible.")
         raise ValidationError(f"Solo le quedan {disponibles} completos disponibles.")

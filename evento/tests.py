@@ -22,7 +22,7 @@ class EventoTests(TestCase):
     def test_no_permite_canjear_mas_de_dos(self):
         a=attendee(); user=get_user_model().objects.create_user("operator")
         registrar_retiro(a,2,user)
-        with self.assertRaises(ValidationError): registrar_retiro(a,1,user)
+        with self.assertRaisesMessage(ValidationError,"Ya retiró sus 2 completos."): registrar_retiro(a,1,user)
 
     def test_recuperacion_exige_mismo_email_y_no_filtra_datos(self):
         a=attendee(); client=APIClient()
