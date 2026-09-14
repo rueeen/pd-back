@@ -1,4 +1,6 @@
+import csv
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.http import HttpResponse
 from django.db.models import Count, F, Prefetch, Q, Sum
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -12,6 +14,7 @@ from .services import registrar_retiro
 from .validators import normalizar_rut
 
 class RegistrationThrottle(AnonRateThrottle): scope="registration"
+class PassRecoveryThrottle(AnonRateThrottle): scope="pass_recovery"
 class CatalogoAreasView(APIView):
     permission_classes=[AllowAny]
     throttle_classes=[]
@@ -36,6 +39,16 @@ class RegistroView(APIView):
 class PaseView(APIView):
     permission_classes=[AllowAny]
     def get(self,request,codigo): return Response(PaseSerializer(get_object_or_404(Asistente,codigo=codigo.upper())).data)
+class RecuperarPaseView(APIView):
+    permission_classes=[AllowAny]; throttle_classes=[PassRecoveryThrottle]
+    def post(self,request):
+        detail="No se encontró un registro con esos datos."
+        try: rut=normalizar_rut(request.data.get("rut",""))
+        except DjangoValidationError: return Response({"detail":detail},status=status.HTTP_404_NOT_FOUND)
+        asistente=Asistente.objects.filter(rut=rut).first(); email=str(request.data.get("email","")).strip()
+        if not asistente or not email or asistente.email.strip().casefold()!=email.casefold():
+            return Response({"detail":detail},status=status.HTTP_404_NOT_FOUND)
+        return Response({"codigo":asistente.codigo})
 class AdminAsistentesView(APIView):
     permission_classes=[IsAuthenticated]
     def get(self,request):
@@ -43,6 +56,14 @@ class AdminAsistentesView(APIView):
         if q: qs=qs.filter(Q(nombre__icontains=q)|Q(apellido__icontains=q)|Q(rut__icontains=q)|Q(codigo__icontains=q))
         if request.query_params.get("con_saldo")=="1": qs=qs.filter(completos_retirados__lt=F("completos_asignados"))
         return Response(AsistenteSerializer(qs,many=True).data)
+class AdminAsistentesExportView(APIView):
+    permission_classes=[IsAuthenticated]
+    def get(self,request):
+        response=HttpResponse(content_type="text/csv; charset=utf-8"); response["Content-Disposition"]='attachment; filename="asistentes.csv"'; response.write("\ufeff")
+        writer=csv.writer(response); writer.writerow(["código","nombre","apellido","RUT","tipo","área","carrera","completos asignados","completos retirados"])
+        for a in Asistente.objects.select_related("area","carrera").order_by("apellido","nombre"):
+            writer.writerow([a.codigo,a.nombre,a.apellido,a.rut,a.tipo,a.area.nombre if a.area else "",a.carrera.nombre if a.carrera else "",a.completos_asignados,a.completos_retirados])
+        return response
 class AdminAsistenteView(APIView):
     permission_classes=[IsAuthenticated]
     def get(self,request,codigo): return Response(AsistenteSerializer(get_object_or_404(Asistente,codigo=codigo.upper())).data)

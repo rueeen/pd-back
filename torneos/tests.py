@@ -120,3 +120,38 @@ def test_walkover_y_marcadores_son_excluyentes():
     response=client.patch(f"/api/admin/partidas/{partida.pk}/resultado/",{"walkover":"a","score_a":1,"score_b":0},format="json")
     assert response.status_code==400
     partida.refresh_from_db(); assert partida.estado=="pendiente"
+
+@pytest.mark.django_db
+def test_bracket_no_publicado_oculta_equipos_y_rondas():
+    t=tournament(); team(t,"Los Pro",_rut_valido(0))
+    response=APIClient().get("/api/torneos/test/bracket/")
+    assert response.status_code==200
+    assert response.data["rondas"]==[]
+    assert "equipos_confirmados" not in response.data
+    assert "equipos_espera" not in response.data
+
+@pytest.mark.django_db
+def test_capitan_no_puede_reemplazar_por_integrante_de_otro_equipo():
+    t=tournament(); primero=team(t,"A",_rut_valido(0)); segundo=team(t,"B",_rut_valido(1))
+    response=APIClient().post(f"/api/equipos/{primero.pk}/integrantes/",{
+        "codigo_capitan":primero.capitan.codigo,"rut_saliente":primero.capitan.rut,
+        "rut_entrante":segundo.capitan.rut,"gamertag":"nuevo"},format="json")
+    # La validación del capitán saliente tiene precedencia; agregamos un segundo integrante reemplazable.
+    assert response.status_code==400
+    suplente=attendee(_rut_valido(2),"Suplente"); Integrante.objects.create(equipo=primero,asistente=suplente)
+    response=APIClient().post(f"/api/equipos/{primero.pk}/integrantes/",{
+        "codigo_capitan":primero.capitan.codigo,"rut_saliente":suplente.rut,
+        "rut_entrante":segundo.capitan.rut,"gamertag":"nuevo"},format="json")
+    assert response.status_code==400
+    assert "ya participa" in response.data["detail"]
+
+@pytest.mark.django_db
+def test_retirar_equipo_promueve_primero_en_espera():
+    t=tournament(1); confirmado=team(t,"A",_rut_valido(0))
+    espera_uno=team(t,"B",_rut_valido(1)); espera_uno.estado="espera"; espera_uno.save()
+    espera_dos=team(t,"C",_rut_valido(2)); espera_dos.estado="espera"; espera_dos.save()
+    response=APIClient().delete(f"/api/equipos/{confirmado.pk}/",{"codigo_capitan":confirmado.capitan.codigo},format="json")
+    assert response.status_code==200
+    confirmado.refresh_from_db(); espera_uno.refresh_from_db(); espera_dos.refresh_from_db()
+    assert confirmado.estado=="retirado"; assert espera_uno.estado=="confirmado"; assert espera_dos.estado=="espera"
+    assert t.promociones.filter(equipo=espera_uno).exists()

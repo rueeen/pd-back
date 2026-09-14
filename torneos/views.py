@@ -1,4 +1,5 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -6,7 +7,9 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models import Equipo, Partida, Torneo
+from evento.models import Asistente
+from evento.validators import normalizar_rut
+from .models import Equipo, Integrante, Partida, PromocionEspera, Torneo
 from .serializers import *
 from .services import generar_bracket, registrar_resultado
 
@@ -43,10 +46,22 @@ class InscripcionView(APIView):
 class BracketView(APIView):
     permission_classes=[AllowAny]
     def get(self,r,slug):
-        return Response(_datos_bracket(get_object_or_404(Torneo,slug=slug)))
+        torneo=get_object_or_404(Torneo,slug=slug)
+        if not torneo.llave_publicada:
+            return Response({"torneo":torneo.nombre,"slug":torneo.slug,"estado":torneo.estado,
+                             "horario":f"{torneo.hora_inicio:%H:%M} – {torneo.hora_fin:%H:%M}",
+                             "total_inscritos":torneo.equipos.exclude(estado="retirado").count(),
+                             "cupo_equipos":torneo.cupo_equipos,"rondas":[]})
+        return Response(_datos_bracket(torneo))
 class TorneoAdminView(APIView):
     permission_classes=[IsAuthenticated]
     def get(self,r,slug): return Response(_datos_bracket(get_object_or_404(Torneo,slug=slug),admin=True))
+    def patch(self,r,slug):
+        torneo=get_object_or_404(Torneo,slug=slug)
+        if "llave_publicada" not in r.data or not isinstance(r.data["llave_publicada"],bool):
+            raise ValidationError({"llave_publicada":"Debe indicar un booleano."})
+        torneo.llave_publicada=r.data["llave_publicada"]; torneo.save(update_fields=["llave_publicada"])
+        return Response({"slug":torneo.slug,"llave_publicada":torneo.llave_publicada})
 class SorteoView(APIView):
     permission_classes=[IsAuthenticated]
     def post(self,r,slug):
@@ -85,3 +100,56 @@ class EquipoAdminView(APIView):
         if not fields: raise ValidationError("Debe indicar estado o acreditado.")
         team.save(update_fields=fields)
         return Response({"id":team.pk,"estado":team.estado,"acreditado":team.acreditado,"acreditado_en":team.acreditado_en})
+
+def _autorizar_capitan(equipo,data):
+    codigo=str(data.get("codigo_capitan","")).upper()
+    if not codigo or codigo!=equipo.capitan.codigo.upper():
+        return Response({"detail":"El código no corresponde al capitán del equipo."},status=status.HTTP_403_FORBIDDEN)
+    if equipo.torneo.estado in ("sorteado","en_curso","finalizado") or equipo.torneo.llave_publicada:
+        return Response({"detail":"La llave ya fue sorteada; debes hablar con el coordinador."},status=status.HTTP_400_BAD_REQUEST)
+    if not equipo.torneo.inscripciones_abiertas:
+        return Response({"detail":"Las inscripciones no están abiertas."},status=status.HTTP_400_BAD_REQUEST)
+
+class EquipoCapitanView(APIView):
+    permission_classes=[AllowAny]
+    def patch(self,r,pk):
+        equipo=get_object_or_404(Equipo.objects.select_related("capitan","torneo"),pk=pk)
+        error=_autorizar_capitan(equipo,r.data)
+        if error: return error
+        nombre=str(r.data.get("nombre_equipo","")).strip()
+        if not nombre: raise ValidationError({"nombre_equipo":"Este campo es obligatorio."})
+        if Equipo.objects.filter(torneo=equipo.torneo,nombre__iexact=nombre).exclude(pk=equipo.pk).exists():
+            raise ValidationError({"nombre_equipo":"El nombre ya está tomado en ese torneo, elige otro."})
+        equipo.nombre=nombre; equipo.save(update_fields=["nombre"])
+        return Response({"id":equipo.pk,"nombre_equipo":equipo.nombre})
+    @transaction.atomic
+    def delete(self,r,pk):
+        equipo=get_object_or_404(Equipo.objects.select_for_update().select_related("capitan","torneo"),pk=pk)
+        error=_autorizar_capitan(equipo,r.data)
+        if error: return error
+        ocupaba_cupo=equipo.estado=="confirmado"; equipo.estado="retirado"; equipo.save(update_fields=["estado"])
+        promovido=None
+        if ocupaba_cupo:
+            promovido=Equipo.objects.select_for_update().filter(torneo=equipo.torneo,estado="espera").order_by("creado_en","pk").first()
+            if promovido:
+                promovido.estado="confirmado"; promovido.save(update_fields=["estado"])
+                PromocionEspera.objects.create(torneo=equipo.torneo,equipo=promovido)
+        return Response({"id":equipo.pk,"estado":"retirado","equipo_promovido_id":promovido.pk if promovido else None})
+
+class EquipoIntegrantesView(APIView):
+    permission_classes=[AllowAny]
+    @transaction.atomic
+    def post(self,r,pk):
+        equipo=get_object_or_404(Equipo.objects.select_for_update().select_related("capitan","torneo"),pk=pk)
+        error=_autorizar_capitan(equipo,r.data)
+        if error: return error
+        try: saliente=normalizar_rut(r.data.get("rut_saliente","")); entrante=normalizar_rut(r.data.get("rut_entrante",""))
+        except DjangoValidationError as exc: raise ValidationError({"detail":exc.messages[0]})
+        if saliente==equipo.capitan.rut: raise ValidationError({"detail":"El capitán no puede sacarse a sí mismo; debe retirar el equipo completo."})
+        integrante=get_object_or_404(Integrante,equipo=equipo,asistente__rut=saliente)
+        nuevo=Asistente.objects.filter(rut=entrante).first()
+        if not nuevo: raise ValidationError({"detail":f"El RUT {entrante} no está registrado; debe registrarse primero al evento."})
+        if Integrante.objects.filter(equipo__torneo=equipo.torneo,asistente=nuevo).exclude(equipo__estado="retirado").exclude(pk=integrante.pk).exists():
+            raise ValidationError({"detail":f"El asistente con RUT {entrante} ya participa en un equipo de este torneo."})
+        integrante.asistente=nuevo; integrante.gamertag=str(r.data.get("gamertag","")).strip(); integrante.save(update_fields=["asistente","gamertag"])
+        return Response({"equipo_id":equipo.pk,"rut_saliente":saliente,"rut_entrante":entrante,"gamertag":integrante.gamertag})
