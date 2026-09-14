@@ -13,6 +13,7 @@ pip install -r requirements.txt
 cp .env.example .env
 python manage.py migrate
 python manage.py cargar_torneos
+python manage.py cargar_carreras
 python manage.py createsuperuser
 python manage.py runserver
 \`\`\`
@@ -29,7 +30,7 @@ La API vive bajo \`/api/\`; el admin de respaldo está en \`/admin-site/\`. Los 
 2. Instale \`requirements.txt\` y cree una base MySQL desde el panel.
 3. Configure las variables de entorno anteriores en el archivo WSGI (no publique secretos).
 4. Ajuste el archivo WSGI para añadir el repositorio a \`sys.path\` y cargar \`config.wsgi.application\`.
-5. Ejecute \`python manage.py migrate\`, \`python manage.py cargar_torneos\`, \`python manage.py createsuperuser\` y \`python manage.py collectstatic --noinput\`.
+5. Ejecute \`python manage.py migrate\`, \`python manage.py cargar_torneos\`, \`python manage.py cargar_carreras\`, \`python manage.py createsuperuser\` y \`python manage.py collectstatic --noinput\`.
 6. Configure los archivos estáticos en el panel Web y recargue la aplicación.
 
 Siempre que cambien dependencias o archivos estáticos, recopile los recursos del admin con:

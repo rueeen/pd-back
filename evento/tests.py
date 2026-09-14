@@ -1,14 +1,15 @@
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.test import TestCase
 from rest_framework.test import APIClient
-from .models import Asistente
+from .models import Area, Asistente, Carrera
 from .services import registrar_retiro
 from .validators import normalizar_rut, validar_rut
 
 def attendee(rut="12345678-5",name="Ada"):
-    return Asistente.objects.create(nombre=name,apellido="Lovelace",rut=rut,email="ada@example.com",tipo="externo",area="informatica")
+    return Asistente.objects.create(nombre=name,apellido="Lovelace",rut=rut,email="ada@example.com",tipo="externo")
 
 class EventoTests(TestCase):
     def test_codigo_aleatorio_y_unico(self):
@@ -39,3 +40,42 @@ class EventoTests(TestCase):
         self.assertEqual(too_many.status_code,400); self.assertEqual(too_many.data,{"detail":"Solo le queda 1 completo disponible."})
         invalid=client.post("/api/admin/retiros/",{"codigo":a.codigo,"cantidad":"dos"},format="json")
         self.assertEqual(invalid.status_code,400); self.assertEqual(invalid.data,{"detail":"La cantidad debe ser 1 o 2."})
+
+class CatalogoTests(TestCase):
+    def setUp(self):
+        self.area=Area.objects.create(nombre="Área uno",slug="area-uno",orden=1)
+        self.otra=Area.objects.create(nombre="Área dos",slug="area-dos",orden=2)
+        self.carrera=Carrera.objects.create(area=self.area,nombre="Carrera uno",slug="carrera-uno")
+        self.otra_carrera=Carrera.objects.create(area=self.otra,nombre="Carrera dos",slug="carrera-dos")
+        self.base={"nombre":"Ana","apellido":"Díaz","rut":"12345678-5","email":"ana@example.com","aporte":"ninguno"}
+
+    def test_carrera_de_otra_area_es_rechazada(self):
+        response=APIClient().post("/api/asistentes/",self.base|{"tipo":"estudiante","area":"area-uno","carrera":"carrera-dos"},format="json")
+        self.assertEqual(response.status_code,400)
+        self.assertEqual(response.data["carrera"][0],"Esta carrera no corresponde al área seleccionada.")
+
+    def test_estudiante_sin_area_es_rechazado(self):
+        response=APIClient().post("/api/asistentes/",self.base|{"tipo":"estudiante","carrera":"carrera-uno"},format="json")
+        self.assertEqual(response.status_code,400)
+        self.assertIn("area",response.data)
+
+    def test_docente_sin_area_es_aceptado(self):
+        response=APIClient().post("/api/asistentes/",self.base|{"tipo":"docente"},format="json")
+        self.assertEqual(response.status_code,201)
+        self.assertIsNone(response.data["area"])
+        self.assertIsNone(response.data["carrera"])
+
+    def test_catalogo_solo_incluye_elementos_activos(self):
+        self.otra.activa=False; self.otra.save()
+        self.carrera.activa=False; self.carrera.save()
+        response=APIClient().get("/api/catalogo/areas/")
+        self.assertEqual(response.status_code,200)
+        catalogo={item["slug"]:item for item in response.data}
+        self.assertNotIn("area-dos",catalogo)
+        self.assertEqual(catalogo["area-uno"]["carreras"],[])
+
+    def test_cargar_carreras_es_idempotente(self):
+        Carrera.objects.all().delete(); Area.objects.all().delete()
+        call_command("cargar_carreras"); call_command("cargar_carreras")
+        self.assertEqual(Area.objects.count(),10)
+        self.assertEqual(Carrera.objects.count(),18)

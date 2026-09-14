@@ -4,15 +4,34 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from .validators import validar_rut
 
+class Area(models.Model):
+    nombre=models.CharField(max_length=120)
+    slug=models.SlugField(unique=True)
+    orden=models.PositiveSmallIntegerField()
+    activa=models.BooleanField(default=True)
+    class Meta: ordering=["orden","nombre"]
+    def __str__(self): return self.nombre
+
+class Carrera(models.Model):
+    area=models.ForeignKey(Area,on_delete=models.PROTECT,related_name="carreras")
+    nombre=models.CharField(max_length=160)
+    slug=models.SlugField(unique=True)
+    activa=models.BooleanField(default=True)
+    class Meta:
+        ordering=["nombre"]
+        unique_together=("area","nombre")
+    def __str__(self): return self.nombre
+
 class Asistente(models.Model):
     TIPOS = [(x,x.title()) for x in ("estudiante","docente","funcionario","externo")]
-    AREAS = [(x,x.title()) for x in ("informatica","diseno","automatizacion","otra")]
     APORTES = [(x,x.title()) for x in ("bebida","snack","galletas","desechables","ninguno")]
     nombre=models.CharField(max_length=60); apellido=models.CharField(max_length=60)
     rut=models.CharField(max_length=12,unique=True,validators=[validar_rut])
     email=models.EmailField(); telefono=models.CharField(max_length=20,blank=True)
-    tipo=models.CharField(max_length=15,choices=TIPOS); area=models.CharField(max_length=20,choices=AREAS)
-    carrera=models.CharField(max_length=120,blank=True); aporte=models.CharField(max_length=15,choices=APORTES,default="ninguno")
+    tipo=models.CharField(max_length=15,choices=TIPOS)
+    area=models.ForeignKey(Area,null=True,blank=True,on_delete=models.PROTECT)
+    carrera=models.ForeignKey(Carrera,null=True,blank=True,on_delete=models.PROTECT)
+    aporte=models.CharField(max_length=15,choices=APORTES,default="ninguno")
     codigo=models.CharField(max_length=12,unique=True,db_index=True,blank=True)
     completos_asignados=models.PositiveSmallIntegerField(default=2)
     completos_retirados=models.PositiveSmallIntegerField(default=0)
