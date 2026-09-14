@@ -26,13 +26,15 @@ class TorneoTests(TestCase):
         bye=t.partidas.get(ronda=1,orden=0); final=t.partidas.get(ronda=2)
         self.assertEqual(bye.estado,"finalizada"); self.assertEqual(bye.ganador,teams[0]); self.assertEqual(final.equipo_a,teams[0])
     def test_corregir_resultado_limpia_rondas_siguientes(self):
-        t=tournament(); teams=[team(t,"A","12345678-5"),team(t,"B","11111111-1"),team(t,"C","22222222-2"),team(t,"D","33333333-3")]
+        t=tournament()
+        for name,rut in [("A","12345678-5"),("B","11111111-1"),("C","22222222-2"),("D","33333333-3")]: team(t,name,rut)
         with patch("torneos.services.random.shuffle",lambda x:None): generar_bracket(t)
         semi1=t.partidas.get(ronda=1,orden=0); semi2=t.partidas.get(ronda=1,orden=1)
+        ganador_original=semi1.equipo_a; ganador_corregido=semi1.equipo_b
         registrar_resultado(semi1,1,0); registrar_resultado(semi2,1,0)
-        final=t.partidas.get(ronda=2); registrar_resultado(final,1,0)
+        final=t.partidas.get(ronda=2); self.assertEqual(final.equipo_a,ganador_original); registrar_resultado(final,1,0)
         registrar_resultado(semi1,0,1,reabrir=True); final.refresh_from_db()
-        self.assertIsNone(final.ganador); self.assertEqual(final.score_a,0); self.assertEqual(final.equipo_a,teams[1])
+        self.assertIsNone(final.ganador); self.assertEqual(final.score_a,0); self.assertEqual(final.equipo_a,ganador_corregido)
 
 def _rut_valido(numero):
     body=str(20000000+numero)
@@ -61,7 +63,7 @@ def test_nombre_equipo_duplicado_devuelve_400():
     t=tournament(); team(t,"Los Pro","12345678-5"); a=attendee("11111111-1","Dos")
     response=APIClient().post("/api/torneos/test/inscripcion/",{"nombre_equipo":"  los pro  ","integrantes":[{"rut":a.rut,"gamertag":"dos"}]},format="json")
     assert response.status_code==400
-    assert "ya está tomado" in str(response.data)
+    assert response.data["nombre_equipo"] == ["El nombre ya está tomado en ese torneo, elige otro."]
 
 @pytest.mark.django_db
 def test_endpoint_admin_torneo_requiere_auth_y_cumple_contrato():
