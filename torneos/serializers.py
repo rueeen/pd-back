@@ -25,7 +25,7 @@ class EquipoAdminSerializer(serializers.ModelSerializer):
     class Meta: model=Equipo; fields=["id","nombre","acreditado","capitan","integrantes"]
 class TorneoSerializer(serializers.ModelSerializer):
     equipos_confirmados=serializers.IntegerField(read_only=True); cupos_disponibles=serializers.IntegerField(read_only=True); inscripciones_abiertas=serializers.BooleanField(read_only=True)
-    class Meta: model=Torneo; fields=["nombre","slug","juego","modalidad","jugadores_por_equipo","cupo_equipos","estado","hora_inicio","hora_fin","reglas","cierre_inscripciones","equipos_confirmados","cupos_disponibles","inscripciones_abiertas"]
+    class Meta: model=Torneo; fields=["nombre","slug","juego","modalidad","jugadores_por_equipo","cupo_equipos","estado","bloque","equipamiento","hora_inicio","hora_fin","reglas","cierre_inscripciones","equipos_confirmados","cupos_disponibles","inscripciones_abiertas"]
 class TorneoDetalleSerializer(TorneoSerializer):
     equipos=serializers.SerializerMethodField()
     class Meta(TorneoSerializer.Meta): fields=TorneoSerializer.Meta.fields+["equipos"]
@@ -46,6 +46,12 @@ class InscripcionSerializer(serializers.Serializer):
             attendee=Asistente.objects.filter(rut=rut).first()
             if not attendee: raise serializers.ValidationError(f"El RUT {rut} no está registrado; debe registrarse primero al evento.")
             if attendee.pk in seen or Integrante.objects.filter(equipo__torneo=torneo,asistente=attendee).exclude(equipo__estado="retirado").exists(): raise serializers.ValidationError(f"El asistente con RUT {rut} ya participa en un equipo de este torneo.")
+            conflicto=(Integrante.objects.select_related("equipo__torneo")
+                       .filter(asistente=attendee,equipo__torneo__bloque=torneo.bloque)
+                       .exclude(equipo__torneo=torneo).exclude(equipo__estado="retirado").first()
+                       if torneo.bloque else None)
+            if conflicto:
+                raise serializers.ValidationError(f"El asistente con RUT {rut} ya participa en {conflicto.equipo.torneo.nombre}, que se juega en el mismo bloque.")
             seen.add(attendee.pk); attendees.append((attendee,member.get("gamertag","")))
         data["attendees"]=attendees; return data
     @transaction.atomic

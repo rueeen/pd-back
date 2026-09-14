@@ -23,25 +23,65 @@ class TorneoTests(TestCase):
         Equipo.objects.filter(pk__in=[primero.pk,segundo.pk]).update(estado="espera")
         response=self._admin().patch("/api/admin/torneos/test/",{"cupo_equipos":2},format="json")
         primero.refresh_from_db(); segundo.refresh_from_db()
-        self.assertEqual(response.status_code,200); self.assertEqual(response.data["equipos_promovidos"],[{"id":primero.pk,"nombre":"B"}])
+        self.assertEqual(response.status_code,200); self.assertEqual(response.data["equipos_promovidos"],[{"id":primero.pk,"nombre":"B","capitan":"B Lovelace"}])
         self.assertEqual(primero.estado,"confirmado"); self.assertEqual(segundo.estado,"espera")
 
     def test_reducir_cupo_bajo_confirmados_es_rechazado(self):
         t=tournament(3); team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1))
         response=self._admin().patch("/api/admin/torneos/test/",{"cupo_equipos":1},format="json")
-        self.assertEqual(response.status_code,400); self.assertIn("2 equipos confirmados",response.data["detail"])
+        self.assertEqual(response.status_code,400); self.assertIn("mayor al cupo actual",response.data["detail"])
 
     def test_cambiar_cupo_con_llave_publicada_es_rechazado(self):
-        t=tournament(); t.llave_publicada=True; t.save()
+        t=tournament(); t.estado="sorteado"; t.llave_publicada=True; t.save()
         response=self._admin().patch("/api/admin/torneos/test/",{"cupo_equipos":5},format="json")
-        self.assertEqual(response.status_code,400); self.assertIn("llave ya está armada",response.data["detail"])
+        self.assertEqual(response.status_code,400); self.assertIn("solo puede ampliarse",response.data["detail"])
 
     def test_lista_espera_sin_cupo(self):
         t=tournament(1); team(t,"Uno","12345678-5"); a=attendee("11111111-1","Dos")
         response=APIClient().post("/api/torneos/test/inscripcion/",{"nombre_equipo":"Dos","integrantes":[{"rut":a.rut,"gamertag":"dos"}]},format="json")
         self.assertEqual(response.status_code,201); self.assertEqual(response.data["estado"],"espera"); self.assertEqual(response.data["posicion_espera"],1)
+
+    def test_sorteo_exige_cerrar_inscripciones(self):
+        t=tournament(); team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1)); client=self._admin()
+        response=client.post("/api/admin/torneos/test/sorteo/",{},format="json")
+        self.assertEqual(response.status_code,400); self.assertIn("cerrar las inscripciones",response.data["detail"])
+        self.assertEqual(client.post("/api/admin/torneos/test/cerrar-inscripciones/").status_code,200)
+        response=client.post("/api/admin/torneos/test/sorteo/",{},format="json")
+        self.assertEqual(response.status_code,200); self.assertEqual(response.data["estado"],"sorteado")
+
+    def test_reabrir_torneo_sorteado_exige_despublicar_llave(self):
+        t=tournament(); team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1)); client=self._admin()
+        client.post("/api/admin/torneos/test/cerrar-inscripciones/")
+        client.post("/api/admin/torneos/test/sorteo/",{},format="json")
+        response=client.post("/api/admin/torneos/test/reabrir-inscripciones/")
+        self.assertEqual(response.status_code,400); self.assertIn("despublicar la llave",response.data["detail"])
+
+    def test_ampliar_cupo_con_torneo_cerrado_es_rechazado(self):
+        t=tournament(); t.estado="cerrado"; t.save(update_fields=["estado"])
+        response=self._admin().patch("/api/admin/torneos/test/",{"cupo_equipos":5},format="json")
+        self.assertEqual(response.status_code,400); self.assertIn("inscripción",response.data["detail"])
+
+    def test_inscripcion_detecta_conflictos_solo_en_el_mismo_bloque(self):
+        t=tournament(); t.bloque="bloque-1"; t.save(update_fields=["bloque"])
+        participante=attendee(_rut_valido(0),"Ada"); existente=Equipo.objects.create(torneo=t,nombre="Original",capitan=participante,estado="confirmado")
+        Integrante.objects.create(equipo=existente,asistente=participante)
+        mismo=Torneo.objects.create(nombre="Mismo bloque",slug="mismo",juego="Game",modalidad="individual",jugadores_por_equipo=1,cupo_equipos=4,bloque="bloque-1",hora_inicio=time(11),hora_fin=time(12),cierre_inscripciones=timezone.now()+timedelta(days=1))
+        otro=Torneo.objects.create(nombre="Otro bloque",slug="otro",juego="Game",modalidad="individual",jugadores_por_equipo=1,cupo_equipos=4,bloque="bloque-2",hora_inicio=time(12),hora_fin=time(13),cierre_inscripciones=timezone.now()+timedelta(days=1))
+        payload={"nombre_equipo":"Nuevo","integrantes":[{"rut":participante.rut}]}
+        response=APIClient().post("/api/torneos/mismo/inscripcion/",payload,format="json")
+        self.assertEqual(response.status_code,400); self.assertIn("Test",str(response.data)); self.assertIn(participante.rut,str(response.data))
+        response=APIClient().post("/api/torneos/otro/inscripcion/",payload,format="json")
+        self.assertEqual(response.status_code,201)
+
+    def test_advertencia_suma_pc_del_bloque_y_excluye_consolas(self):
+        t=tournament(2); t.bloque="bloque-1"; t.equipamiento="pc"; t.modalidad="equipo"; t.jugadores_por_equipo=5; t.save()
+        Torneo.objects.create(nombre="PC simultáneo",slug="pc",juego="Game",modalidad="equipo",jugadores_por_equipo=5,cupo_equipos=2,bloque="bloque-1",equipamiento="pc",hora_inicio=time(11),hora_fin=time(12),cierre_inscripciones=timezone.now()+timedelta(days=1))
+        Torneo.objects.create(nombre="Consolas",slug="consola",juego="Game",modalidad="individual",jugadores_por_equipo=1,cupo_equipos=32,bloque="bloque-1",equipamiento="consola",hora_inicio=time(11),hora_fin=time(12),cierre_inscripciones=timezone.now()+timedelta(days=1))
+        response=self._admin().patch("/api/admin/torneos/test/",{"cupo_equipos":4},format="json")
+        self.assertEqual(response.status_code,200); self.assertIn("30 estaciones",response.data["advertencia"])
     def test_bracket_tres_equipos_propaga_bye(self):
         t=tournament(); teams=[team(t,"A","12345678-5"),team(t,"B","11111111-1"),team(t,"C","22222222-2")]
+        t.estado="cerrado"; t.save(update_fields=["estado"])
         with patch("torneos.services.random.shuffle",lambda x:None): generar_bracket(t)
         self.assertEqual(t.partidas.count(),3)
         bye=t.partidas.get(ronda=1,orden=0); final=t.partidas.get(ronda=2)
@@ -49,6 +89,7 @@ class TorneoTests(TestCase):
     def test_corregir_resultado_limpia_rondas_siguientes(self):
         t=tournament()
         for name,rut in [("A","12345678-5"),("B","11111111-1"),("C","22222222-2"),("D","33333333-3")]: team(t,name,rut)
+        t.estado="cerrado"; t.save(update_fields=["estado"])
         with patch("torneos.services.random.shuffle",lambda x:None): generar_bracket(t)
         semi1=t.partidas.get(ronda=1,orden=0); semi2=t.partidas.get(ronda=1,orden=1)
         ganador_original=semi1.equipo_a; ganador_corregido=semi1.equipo_b
@@ -69,6 +110,7 @@ def _rut_valido(numero):
 def test_bracket_cualquier_tamano_llega_a_un_campeon(n):
     t=tournament(capacity=16)
     for i in range(n): team(t,f"Equipo {i+1}",_rut_valido(i))
+    t.estado="cerrado"; t.save(update_fields=["estado"])
     with patch("torneos.services.random.shuffle",lambda x:None): generar_bracket(t)
     assert not t.partidas.filter(ronda=1,equipo_a__isnull=True,equipo_b__isnull=True).exists()
     while True:
@@ -103,6 +145,7 @@ def test_acreditar_y_sortear_solo_equipos_acreditados():
         response=client.patch(f"/api/admin/equipos/{equipo.pk}/",{"acreditado":True},format="json")
         assert response.status_code==200
         equipo.refresh_from_db(); assert equipo.acreditado is True; assert equipo.acreditado_en is not None
+    client.post("/api/admin/torneos/test/cerrar-inscripciones/")
     with patch("torneos.services.random.shuffle",lambda x:None):
         response=client.post("/api/admin/torneos/test/sorteo/",{"solo_acreditados":True},format="json")
     assert response.status_code==200
@@ -114,6 +157,7 @@ def test_acreditar_y_sortear_solo_equipos_acreditados():
 def test_sorteo_rechaza_menos_de_dos_acreditados_con_recuento():
     t=tournament(); acreditado=team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1)); acreditado.acreditado=True; acreditado.save()
     user=get_user_model().objects.create_user("admin"); client=APIClient(); client.force_authenticate(user)
+    client.post("/api/admin/torneos/test/cerrar-inscripciones/")
     response=client.post("/api/admin/torneos/test/sorteo/",{"solo_acreditados":True},format="json")
     assert response.status_code==400
     assert "1 equipos acreditados de 2 inscritos" in response.data["detail"]
@@ -122,6 +166,7 @@ def test_sorteo_rechaza_menos_de_dos_acreditados_con_recuento():
 def test_walkover_finaliza_y_propaga_ganador():
     t=tournament()
     for i in range(4): team(t,chr(65+i),_rut_valido(i))
+    t.estado="cerrado"; t.save(update_fields=["estado"])
     with patch("torneos.services.random.shuffle",lambda x:None): generar_bracket(t)
     partida=t.partidas.get(ronda=1,orden=0); user=get_user_model().objects.create_user("admin")
     client=APIClient(); client.force_authenticate(user)
@@ -135,7 +180,7 @@ def test_walkover_finaliza_y_propaga_ganador():
 
 @pytest.mark.django_db
 def test_walkover_y_marcadores_son_excluyentes():
-    t=tournament(); team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1)); generar_bracket(t)
+    t=tournament(); team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1)); t.estado="cerrado"; t.save(); generar_bracket(t)
     partida=t.partidas.get(); user=get_user_model().objects.create_user("admin")
     client=APIClient(); client.force_authenticate(user)
     response=client.patch(f"/api/admin/partidas/{partida.pk}/resultado/",{"walkover":"a","score_a":1,"score_b":0},format="json")

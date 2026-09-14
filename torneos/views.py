@@ -31,6 +31,12 @@ def _datos_bracket(torneo,admin=False):
             "equipos_confirmados":equipos("confirmado"),"equipos_espera":equipos("espera"),
             "rondas":[{"ronda":n,"nombre":_nombre_ronda(n,total),"total_partidas":sum(x["ronda"]==n for x in matches),
                        "partidas":[x for x in matches if x["ronda"]==n]} for n in rondas]}
+
+def _demanda_primera_ronda(torneo):
+    potencia=2**int(math.floor(math.log2(torneo.cupo_equipos)))
+    equipos=torneo.cupo_equipos if potencia==torneo.cupo_equipos else 2*(torneo.cupo_equipos-potencia)
+    return equipos*torneo.jugadores_por_equipo
+
 class TorneosView(APIView):
     permission_classes=[AllowAny]
     def get(self,r): return Response(TorneoSerializer(Torneo.objects.all(),many=True).data)
@@ -65,38 +71,62 @@ class TorneoAdminView(APIView):
             if not isinstance(r.data["llave_publicada"],bool):
                 raise ValidationError({"llave_publicada":"Debe indicar un booleano."})
             torneo.llave_publicada=r.data["llave_publicada"]; fields.append("llave_publicada")
+            if not torneo.llave_publicada and torneo.estado=="sorteado":
+                torneo.estado="cerrado"; fields.append("estado")
         if "cierre_inscripciones" in r.data:
             from django.utils.dateparse import parse_datetime
             cierre=parse_datetime(str(r.data["cierre_inscripciones"]))
             if cierre is None: raise ValidationError({"cierre_inscripciones":"Ingrese una fecha y hora válidas."})
             if timezone.is_naive(cierre): cierre=timezone.make_aware(cierre)
+            if torneo.estado!="inscripcion":
+                raise ValidationError({"cierre_inscripciones":"El plazo solo puede extenderse durante las inscripciones."})
+            if cierre<=torneo.cierre_inscripciones:
+                raise ValidationError({"cierre_inscripciones":"La nueva fecha debe ser posterior al cierre actual."})
             torneo.cierre_inscripciones=cierre; fields.append("cierre_inscripciones")
         if "cupo_equipos" in r.data:
-            if torneo.llave_publicada:
-                return Response({"detail":"La llave ya está armada. Vuelve llave_publicada a falso y sortea de nuevo antes de cambiar el cupo."},status=400)
+            if torneo.estado!="inscripcion":
+                return Response({"detail":"El cupo solo puede ampliarse mientras el torneo está en inscripción."},status=400)
             try: nuevo=int(r.data["cupo_equipos"])
             except (TypeError,ValueError): raise ValidationError({"cupo_equipos":"Debe ser un entero positivo."})
             if nuevo < 1: raise ValidationError({"cupo_equipos":"Debe ser un entero positivo."})
-            confirmados=torneo.equipos.filter(estado="confirmado").count()
-            if nuevo < confirmados:
-                return Response({"detail":f"Hay {confirmados} equipos confirmados; primero debes dar de baja los que correspondan antes de reducir el cupo."},status=400)
             anterior=torneo.cupo_equipos; torneo.cupo_equipos=nuevo; fields.append("cupo_equipos")
-            if nuevo>anterior:
-                espera=list(torneo.equipos.select_for_update().filter(estado="espera").order_by("creado_en","pk")[:nuevo-confirmados])
-                for equipo in espera:
-                    equipo.estado="confirmado"; equipo.save(update_fields=["estado"])
-                    PromocionEspera.objects.create(torneo=torneo,equipo=equipo)
-                    promovidos.append({"id":equipo.pk,"nombre":equipo.nombre})
+            if nuevo<=anterior:
+                return Response({"detail":"El nuevo cupo debe ser mayor al cupo actual."},status=400)
+            confirmados=torneo.equipos.filter(estado="confirmado").count()
+            espera=list(torneo.equipos.select_for_update().select_related("capitan").filter(estado="espera").order_by("creado_en","pk")[:nuevo-confirmados])
+            for equipo in espera:
+                equipo.estado="confirmado"; equipo.save(update_fields=["estado"])
+                PromocionEspera.objects.create(torneo=torneo,equipo=equipo)
+                promovidos.append({"id":equipo.pk,"nombre":equipo.nombre,"capitan":f"{equipo.capitan.nombre} {equipo.capitan.apellido}"})
         if not fields: raise ValidationError("Debe indicar cupo_equipos, cierre_inscripciones o llave_publicada.")
         torneo.save(update_fields=list(dict.fromkeys(fields)))
         data={"slug":torneo.slug,"cupo_equipos":torneo.cupo_equipos,"cierre_inscripciones":torneo.cierre_inscripciones,
               "llave_publicada":torneo.llave_publicada,"equipos_promovidos":promovidos}
-        if "cupo_equipos" in r.data and torneo.modalidad=="equipo":
-            potencia=2**int(math.floor(math.log2(torneo.cupo_equipos)))
-            primera=torneo.cupo_equipos if potencia==torneo.cupo_equipos else 2*(torneo.cupo_equipos-potencia)
-            if primera*torneo.jugadores_por_equipo>20:
-                data["advertencia"]="La primera ronda excede las 20 estaciones simultáneas disponibles y el bloque horario asignado."
+        if "cupo_equipos" in r.data:
+            demanda=sum(_demanda_primera_ronda(t) for t in Torneo.objects.filter(bloque=torneo.bloque,equipamiento=torneo.equipamiento))
+            if demanda>20:
+                data["advertencia"]=f"El bloque y equipamiento asignados requieren {demanda} estaciones simultáneas y exceden las 20 disponibles."
         return Response(data)
+
+class CerrarInscripcionesView(APIView):
+    permission_classes=[IsAuthenticated]
+    def post(self,r,slug):
+        torneo=get_object_or_404(Torneo,slug=slug)
+        if torneo.estado!="inscripcion":
+            return Response({"detail":"Solo se pueden cerrar inscripciones desde el estado inscripción."},status=400)
+        torneo.estado="cerrado"; torneo.save(update_fields=["estado"])
+        return Response({"slug":torneo.slug,"estado":torneo.estado})
+
+class ReabrirInscripcionesView(APIView):
+    permission_classes=[IsAuthenticated]
+    def post(self,r,slug):
+        torneo=get_object_or_404(Torneo,slug=slug)
+        if torneo.estado in ("sorteado","en_curso","finalizado") or torneo.llave_publicada:
+            return Response({"detail":"Primero debes despublicar la llave antes de reabrir las inscripciones."},status=400)
+        if torneo.estado!="cerrado":
+            return Response({"detail":"Solo se pueden reabrir inscripciones desde el estado cerrado."},status=400)
+        torneo.estado="inscripcion"; torneo.save(update_fields=["estado"])
+        return Response({"slug":torneo.slug,"estado":torneo.estado})
 class SorteoView(APIView):
     permission_classes=[IsAuthenticated]
     def post(self,r,slug):

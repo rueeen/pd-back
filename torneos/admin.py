@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import Torneo, Equipo, Integrante, Partida
 @admin.register(Torneo)
-class TorneoAdmin(admin.ModelAdmin): list_display=["nombre","modalidad","cupo_equipos","estado","hora_inicio"]; search_fields=["nombre","slug","juego"]; list_filter=["modalidad","estado"]
+class TorneoAdmin(admin.ModelAdmin): list_display=["nombre","modalidad","cupo_equipos","estado","bloque","equipamiento","hora_inicio"]; search_fields=["nombre","slug","juego"]; list_filter=["modalidad","estado","bloque","equipamiento"]
 @admin.register(Equipo)
 class EquipoAdmin(admin.ModelAdmin): list_display=["nombre","torneo","capitan","estado","seed"]; search_fields=["nombre","capitan__rut"]; list_filter=["torneo","estado"]
 @admin.register(Integrante)
