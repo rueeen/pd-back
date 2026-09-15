@@ -36,5 +36,5 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", str(not DEBUG)).lower() in ("1", "true", "yes")
 CSRF_COOKIE_SECURE = os.environ.get("CSRF_COOKIE_SECURE", str(not DEBUG)).lower() in ("1", "true", "yes")
 SECURE_HSTS_SECONDS = 0
-REST_FRAMEWORK = {"DEFAULT_AUTHENTICATION_CLASSES":["rest_framework_simplejwt.authentication.JWTAuthentication"],"DEFAULT_PERMISSION_CLASSES":["rest_framework.permissions.IsAuthenticated"],"DEFAULT_THROTTLE_RATES":{"registration":"300/hour","pass_recovery":"200/hour","team_management":"60/hour"}}
+REST_FRAMEWORK = {"DEFAULT_AUTHENTICATION_CLASSES":["rest_framework_simplejwt.authentication.JWTAuthentication"],"DEFAULT_PERMISSION_CLASSES":["rest_framework.permissions.IsAuthenticated"],"DEFAULT_THROTTLE_RATES":{"registration":"300/hour","pass_recovery":"200/hour","padron":"100/hour","team_management":"60/hour"}}
 SIMPLE_JWT = {"ACCESS_TOKEN_LIFETIME":timedelta(hours=8),"REFRESH_TOKEN_LIFETIME":timedelta(days=7)}

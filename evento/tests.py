@@ -1,10 +1,13 @@
 from unittest.mock import patch
+import importlib.util
+import io
+from unittest import skipUnless
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command, CommandError
 from django.test import TestCase
 from rest_framework.test import APIClient
-from .models import Area, Asistente, Carrera, ConfiguracionEvento
+from .models import AlumnoHabilitado, Area, Asistente, Carrera, ConfiguracionEvento
 from .services import registrar_retiro
 from .validators import normalizar_rut, validar_rut
 
@@ -123,6 +126,57 @@ class CatalogoTests(TestCase):
                 "email":f"throttle-{indice}@example.test","tipo":"docente","aporte":"ninguno",
             },format="json",REMOTE_ADDR="192.0.2.25")
             self.assertEqual(response.status_code,201,response.data)
+
+class PadronTests(TestCase):
+    def setUp(self):
+        self.area=Area.objects.create(nombre="Área prioritaria",slug="prioritaria",orden=1)
+        self.otra_area=Area.objects.create(nombre="Otra área",slug="otra",orden=2)
+        self.carrera=Carrera.objects.create(area=self.area,nombre="Carrera Prioritaria",slug="carrera-prioritaria")
+        self.otra_carrera=Carrera.objects.create(area=self.otra_area,nombre="Carrera Secundaria",slug="carrera-secundaria")
+        self.config=ConfiguracionEvento.obtener(); self.config.registro_restringido=True; self.config.save()
+        self.config.areas_prioritarias.add(self.area)
+        self.base={"nombre":"Ana","apellido":"Díaz","email":"ana@example.com","tipo":"estudiante","area":self.area.slug,"carrera":self.carrera.slug}
+
+    def test_rechazos_usan_el_mismo_mensaje(self):
+        fuera=APIClient().post("/api/asistentes/",self.base|{"rut":"12345678-5"},format="json")
+        AlumnoHabilitado.objects.create(rut="11111111-1",nombre="Otra",apellido="Persona",carrera=self.otra_carrera)
+        otra_area=APIClient().post("/api/asistentes/",self.base|{"rut":"11111111-1"},format="json")
+        self.assertEqual(fuera.status_code,403); self.assertEqual(otra_area.status_code,403)
+        self.assertEqual(fuera.data,otra_area.data)
+
+    def test_habilitado_y_externo_son_aceptados(self):
+        AlumnoHabilitado.objects.create(rut="12345678-5",nombre="Ana",apellido="Díaz",carrera=self.carrera)
+        estudiante=APIClient().post("/api/asistentes/",self.base|{"rut":"12345678-5"},format="json")
+        externo=APIClient().post("/api/asistentes/",{"nombre":"Luis","apellido":"Pérez","rut":"11111111-1","email":"luis@example.com","tipo":"externo"},format="json")
+        self.assertEqual(estudiante.status_code,201); self.assertEqual(externo.status_code,201)
+
+    def test_recuperacion_no_se_restringe(self):
+        existente=attendee()
+        response=APIClient().post("/api/pase/recuperar/",{"rut":existente.rut,"email":existente.email},format="json")
+        self.assertEqual(response.status_code,200); self.assertEqual(response.data["codigo"],existente.codigo)
+
+    def test_prellenado_no_expone_padron_con_restriccion_apagada(self):
+        AlumnoHabilitado.objects.create(rut="12345678-5",nombre="Ana",apellido="Díaz",carrera=self.carrera)
+        self.config.registro_restringido=False; self.config.save()
+        self.assertEqual(APIClient().get("/api/padron/12345678-5/").status_code,404)
+
+    def test_borrado_se_rechaza_con_restriccion_activa(self):
+        user=get_user_model().objects.create_user("admin-padron"); client=APIClient(); client.force_authenticate(user)
+        response=client.delete("/api/admin/padron/",{"confirmacion":"BORRAR PADRON"},format="json")
+        self.assertEqual(response.status_code,400)
+
+    @skipUnless(importlib.util.find_spec("openpyxl"),"openpyxl no está instalado en este entorno")
+    def test_reemplazo_invalido_deja_padron_anterior_intacto(self):
+        from openpyxl import Workbook
+        anterior=AlumnoHabilitado.objects.create(rut="12345678-5",nombre="Anterior",apellido="Persona",carrera=self.carrera)
+        wb=Workbook(); ws=wb.active; ws.title="Alumnos"
+        ws.append(["RUT","Nombre","Apellido","Correo","Carrera"])
+        ws.append(["11.111.111-9","Inválido","Ejemplo","test@example.com",self.carrera.nombre])
+        content=io.BytesIO(); wb.save(content); content.seek(0); content.name="padron.xlsx"
+        user=get_user_model().objects.create_user("admin-import"); client=APIClient(); client.force_authenticate(user)
+        response=client.post("/api/admin/padron/cargar/",{"archivo":content,"modo":"reemplazar"},format="multipart")
+        self.assertEqual(response.status_code,400)
+        self.assertTrue(AlumnoHabilitado.objects.filter(pk=anterior.pk).exists())
 
 
 class DatosPruebaTests(TestCase):
