@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.exceptions import Throttled
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from .models import Area, Asistente, Carrera, ConfiguracionEvento, RetiroCompleto
@@ -14,8 +15,13 @@ from .serializers import AreaCatalogoSerializer, AsistenteSerializer, Configurac
 from .services import registrar_retiro
 from .validators import normalizar_rut
 
-class RegistrationThrottle(AnonRateThrottle): scope="registration"
-class PassRecoveryThrottle(AnonRateThrottle): scope="pass_recovery"
+class ExplainedAnonRateThrottle(AnonRateThrottle):
+    message = "Se alcanzó el límite de solicitudes desde esta red. Intenta nuevamente en unos minutos."
+    def allow_request(self, request, view):
+        if super().allow_request(request, view): return True
+        raise Throttled(wait=self.wait(), detail=self.message)
+class RegistrationThrottle(ExplainedAnonRateThrottle): scope="registration"
+class PassRecoveryThrottle(ExplainedAnonRateThrottle): scope="pass_recovery"
 class CatalogoAreasView(APIView):
     permission_classes=[AllowAny]
     throttle_classes=[]
@@ -98,6 +104,7 @@ class AdminAsistentesExportView(APIView):
     permission_classes=[IsAuthenticated]
     def get(self,request):
         response=HttpResponse(content_type="text/csv; charset=utf-8"); response["Content-Disposition"]='attachment; filename="asistentes.csv"'; response.write("\ufeff")
+        response.write("# Contiene datos personales. La copia impresa debe destruirse al cierre de la jornada.\r\n")
         writer=csv.writer(response); writer.writerow(["código","nombre","apellido","RUT","tipo","área","carrera","completos asignados","completos retirados"])
         for a in Asistente.objects.select_related("area","carrera").order_by("apellido","nombre"):
             writer.writerow([a.codigo,a.nombre,a.apellido,a.rut,a.tipo,a.area.nombre if a.area else "",a.carrera.nombre if a.carrera else "",a.completos_asignados,a.completos_retirados])

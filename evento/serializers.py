@@ -35,10 +35,12 @@ class AreaCatalogoSerializer(serializers.ModelSerializer):
 
 class PaseSerializer(serializers.ModelSerializer):
     rut=serializers.SerializerMethodField(); completos_disponibles=serializers.IntegerField(read_only=True)
+    area_nombre=serializers.CharField(source="area.nombre",read_only=True,allow_null=True)
+    carrera_nombre=serializers.CharField(source="carrera.nombre",read_only=True,allow_null=True)
     torneos=serializers.SerializerMethodField()
     class Meta:
         model=Asistente
-        fields=["nombre","apellido","rut","codigo","completos_asignados","completos_retirados","completos_disponibles","torneos"]
+        fields=["nombre","apellido","rut","area_nombre","carrera_nombre","codigo","completos_asignados","completos_retirados","completos_disponibles","torneos"]
     def get_rut(self,obj): return enmascarar_rut(obj.rut)
     def get_torneos(self,obj):
         result=[]
@@ -53,10 +55,13 @@ class PaseSerializer(serializers.ModelSerializer):
         return result
 
 class RetiroSerializer(serializers.ModelSerializer):
-    asistente=serializers.SerializerMethodField(); validado_por=serializers.StringRelatedField()
+    asistente=serializers.SerializerMethodField(); validado_por=serializers.SerializerMethodField()
     class Meta: model=RetiroCompleto; fields=["id","asistente","cantidad","validado_por","creado_en"]
     def get_asistente(self,obj):
         return {"nombre":obj.asistente.nombre,"apellido":obj.asistente.apellido,"codigo":obj.asistente.codigo}
+    def get_validado_por(self,obj):
+        if obj.validado_por is None: return None
+        return obj.validado_por.get_full_name() or obj.validado_por.get_username()
 
 class ConfiguracionEventoSerializer(serializers.ModelSerializer):
     aplicar_a_existentes=serializers.BooleanField(write_only=True,required=False,default=False)

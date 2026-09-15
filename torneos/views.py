@@ -10,9 +10,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from evento.models import Asistente
 from evento.validators import normalizar_rut
+from evento.views import ExplainedAnonRateThrottle
 from .models import Equipo, Integrante, Partida, PromocionEspera, Torneo
 from .serializers import *
 from .services import generar_bracket, registrar_resultado
+
+class TeamManagementThrottle(ExplainedAnonRateThrottle): scope="team_management"
 
 def _nombre_ronda(numero,total):
     distancia=total-numero
@@ -177,6 +180,7 @@ def _autorizar_capitan(equipo,data):
 
 class EquipoCapitanView(APIView):
     permission_classes=[AllowAny]
+    throttle_classes=[TeamManagementThrottle]
     def patch(self,r,pk):
         equipo=get_object_or_404(Equipo.objects.select_related("capitan","torneo"),pk=pk)
         error=_autorizar_capitan(equipo,r.data)
@@ -203,6 +207,7 @@ class EquipoCapitanView(APIView):
 
 class EquipoIntegrantesView(APIView):
     permission_classes=[AllowAny]
+    throttle_classes=[TeamManagementThrottle]
     @transaction.atomic
     def post(self,r,pk):
         equipo=get_object_or_404(Equipo.objects.select_for_update().select_related("capitan","torneo"),pk=pk)
