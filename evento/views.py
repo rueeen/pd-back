@@ -61,14 +61,19 @@ class RegistroView(APIView):
             asistente=s.save(completos_asignados=configuracion.completos_por_asistente)
         return Response(AsistenteSerializer(asistente).data,status=status.HTTP_201_CREATED)
 
-def _datos_configuracion(configuracion):
+def _datos_configuracion(configuracion, incluir_nombres_areas=False):
     registrados=Asistente.objects.count()
+    areas=configuracion.areas_prioritarias.order_by("orden","nombre")
+    if incluir_nombres_areas:
+        areas_prioritarias=list(areas.values("slug","nombre"))
+    else:
+        areas_prioritarias=list(areas.values_list("slug",flat=True))
     return {"registro_abierto":configuracion.registro_abierto,"cupo_asistentes":configuracion.cupo_asistentes,
             "registrados":registrados,"cupos_disponibles":max(0,configuracion.cupo_asistentes-registrados),
             "completos_por_asistente":configuracion.completos_por_asistente,
             "mensaje_cupos_agotados":configuracion.mensaje_cupos_agotados,
             "registro_restringido":configuracion.registro_restringido,
-            "areas_prioritarias":list(configuracion.areas_prioritarias.values_list("slug",flat=True))}
+            "areas_prioritarias":areas_prioritarias}
 
 MENSAJE_REGISTRO_RESTRINGIDO = "Las inscripciones están abiertas por ahora a un grupo de carreras y se abrirán al resto más adelante."
 
@@ -87,7 +92,7 @@ class PadronPrellenadoView(APIView):
 
 class ConfiguracionEventoView(APIView):
     permission_classes=[AllowAny]
-    def get(self,request): return Response(_datos_configuracion(ConfiguracionEvento.obtener()))
+    def get(self,request): return Response(_datos_configuracion(ConfiguracionEvento.obtener(),incluir_nombres_areas=True))
 
 class AdminConfiguracionEventoView(APIView):
     permission_classes=[IsAuthenticated]
