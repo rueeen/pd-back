@@ -116,6 +116,15 @@ class CatalogoTests(TestCase):
             {"slug":"area-uno","nombre":"Área uno"},
             {"slug":"area-dos","nombre":"Área dos"},
         ])
+        self.assertNotIn("restriccion_todos_los_tipos",response.data)
+
+    def test_restriccion_todos_los_tipos_solo_se_expone_y_edita_en_admin(self):
+        user=get_user_model().objects.create_user("admin-restriccion"); client=APIClient(); client.force_authenticate(user)
+        response=client.patch("/api/admin/configuracion/",{"restriccion_todos_los_tipos":True},format="json")
+        self.assertEqual(response.status_code,200)
+        self.assertTrue(response.data["restriccion_todos_los_tipos"])
+        self.assertTrue(client.get("/api/admin/configuracion/").data["restriccion_todos_los_tipos"])
+        self.assertNotIn("restriccion_todos_los_tipos",APIClient().get("/api/configuracion/").data)
 
     def test_cargar_carreras_es_idempotente(self):
         Carrera.objects.all().delete(); Area.objects.all().delete()
@@ -151,19 +160,35 @@ class PadronTests(TestCase):
         self.base={"nombre":"Ana","apellido":"Díaz","email":"ana@example.com","tipo":"estudiante","area":self.area.slug,"carrera":self.carrera.slug}
 
     def test_rechazos_usan_el_mismo_mensaje(self):
+        self.config.restriccion_todos_los_tipos=True; self.config.save()
         fuera=APIClient().post("/api/asistentes/",self.base|{"rut":"12345678-5"},format="json")
         AlumnoHabilitado.objects.create(rut="11111111-1",nombre="Otra",apellido="Persona",carrera=self.otra_carrera)
         otra_area=APIClient().post("/api/asistentes/",self.base|{"rut":"11111111-1"},format="json")
-        self.assertEqual(fuera.status_code,403); self.assertEqual(otra_area.status_code,403)
-        self.assertEqual(fuera.data,otra_area.data)
+        externo=APIClient().post("/api/asistentes/",self.base|{"rut":"22222222-2","tipo":"externo","area":None,"carrera":None},format="json")
+        self.assertEqual(fuera.status_code,403); self.assertEqual(otra_area.status_code,403); self.assertEqual(externo.status_code,403)
+        self.assertEqual(fuera.data,otra_area.data); self.assertEqual(fuera.data,externo.data)
 
-    def test_habilitado_y_externo_son_aceptados(self):
+    def test_habilitado_sin_carrera_es_aceptado_con_areas_prioritarias(self):
+        self.config.restriccion_todos_los_tipos=True; self.config.save()
+        AlumnoHabilitado.objects.create(rut="11111111-1",nombre="Luis",apellido="Pérez")
+        response=APIClient().post("/api/asistentes/",self.base|{"rut":"11111111-1","tipo":"funcionario","area":None,"carrera":None},format="json")
+        self.assertEqual(response.status_code,201)
+
+    def test_docente_del_padron_en_area_no_prioritaria_es_rechazado(self):
+        self.config.restriccion_todos_los_tipos=True; self.config.save()
+        AlumnoHabilitado.objects.create(rut="11111111-1",nombre="Otra",apellido="Persona",carrera=self.otra_carrera)
+        response=APIClient().post("/api/asistentes/",self.base|{"rut":"11111111-1","tipo":"docente","area":None,"carrera":None},format="json")
+        self.assertEqual(response.status_code,403)
+
+    def test_con_interruptor_apagado_habilitado_y_externo_son_aceptados(self):
+        self.assertFalse(self.config.restriccion_todos_los_tipos)
         AlumnoHabilitado.objects.create(rut="12345678-5",nombre="Ana",apellido="Díaz",carrera=self.carrera)
         estudiante=APIClient().post("/api/asistentes/",self.base|{"rut":"12345678-5"},format="json")
         externo=APIClient().post("/api/asistentes/",{"nombre":"Luis","apellido":"Pérez","rut":"11111111-1","email":"luis@example.com","tipo":"externo"},format="json")
         self.assertEqual(estudiante.status_code,201); self.assertEqual(externo.status_code,201)
 
     def test_recuperacion_no_se_restringe(self):
+        self.config.restriccion_todos_los_tipos=True; self.config.save()
         existente=attendee()
         response=APIClient().post("/api/pase/recuperar/",{"rut":existente.rut,"email":existente.email},format="json")
         self.assertEqual(response.status_code,200); self.assertEqual(response.data["codigo"],existente.codigo)
