@@ -1,7 +1,7 @@
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
+from django.core.management import call_command, CommandError
 from django.test import TestCase
 from rest_framework.test import APIClient
 from .models import Area, Asistente, Carrera, ConfiguracionEvento
@@ -106,3 +106,35 @@ class CatalogoTests(TestCase):
         call_command("cargar_carreras"); call_command("cargar_carreras")
         self.assertEqual(Area.objects.count(),10)
         self.assertEqual(Carrera.objects.count(),18)
+
+    def test_pase_incluye_carrera_y_area_pero_no_datos_de_contacto(self):
+        asistente=attendee()
+        asistente.area=self.area; asistente.carrera=self.carrera; asistente.save()
+        data=APIClient().get(f"/api/pase/{asistente.codigo}/").data
+        self.assertEqual(data["area_nombre"],self.area.nombre)
+        self.assertEqual(data["carrera_nombre"],self.carrera.nombre)
+        self.assertNotIn("email",data); self.assertNotIn("telefono",data)
+
+    def test_throttle_permite_mas_de_veinte_registros_desde_una_ip(self):
+        client=APIClient()
+        for indice in range(21):
+            response=client.post("/api/asistentes/",{
+                "nombre":"Ensayo","apellido":str(indice),"rut":_rut_valido_registro(indice),
+                "email":f"throttle-{indice}@example.test","tipo":"docente","aporte":"ninguno",
+            },format="json",REMOTE_ADDR="192.0.2.25")
+            self.assertEqual(response.status_code,201,response.data)
+
+
+class DatosPruebaTests(TestCase):
+    def test_limpiar_se_niega_con_debug_falso(self):
+        with self.settings(DEBUG=False):
+            with self.assertRaisesMessage(CommandError,"DEBUG=False"):
+                call_command("datos_prueba",limpiar=True)
+
+
+def _rut_valido_registro(numero):
+    cuerpo=str(40000000+numero)
+    total=sum(int(d)*factor for d,factor in zip(reversed(cuerpo),(2,3,4,5,6,7,2,3)))
+    resultado=11-total%11
+    dv="0" if resultado==11 else "K" if resultado==10 else str(resultado)
+    return f"{cuerpo}-{dv}"
