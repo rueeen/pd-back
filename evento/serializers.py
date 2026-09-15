@@ -65,6 +65,7 @@ class RetiroSerializer(serializers.ModelSerializer):
 
 class ConfiguracionEventoSerializer(serializers.ModelSerializer):
     aplicar_a_existentes=serializers.BooleanField(write_only=True,required=False,default=False)
+    areas_prioritarias=serializers.SlugRelatedField(slug_field="slug",queryset=Area.objects.all(),many=True,required=False)
     class Meta:
         model=ConfiguracionEvento
-        fields=["cupo_asistentes","registro_abierto","completos_por_asistente","mensaje_cupos_agotados","aplicar_a_existentes"]
+        fields=["cupo_asistentes","registro_abierto","completos_por_asistente","mensaje_cupos_agotados","registro_restringido","areas_prioritarias","aplicar_a_existentes"]

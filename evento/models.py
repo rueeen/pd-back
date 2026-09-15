@@ -14,6 +14,8 @@ class ConfiguracionEvento(models.Model):
     registro_abierto=models.BooleanField(default=True)
     completos_por_asistente=models.PositiveSmallIntegerField(default=2)
     mensaje_cupos_agotados=models.TextField(blank=True,default="")
+    registro_restringido=models.BooleanField(default=False)
+    areas_prioritarias=models.ManyToManyField("Area",blank=True,related_name="configuraciones_prioritarias")
 
     @classmethod
     def obtener(cls):
@@ -46,6 +48,19 @@ class Carrera(models.Model):
         ordering=["nombre"]
         unique_together=("area","nombre")
     def __str__(self): return self.nombre
+
+class AlumnoHabilitado(models.Model):
+    rut=models.CharField(max_length=12,unique=True,db_index=True,validators=[validar_rut])
+    nombre=models.CharField(max_length=60)
+    apellido=models.CharField(max_length=60)
+    email=models.EmailField(blank=True)
+    carrera=models.ForeignKey(Carrera,null=True,blank=True,on_delete=models.PROTECT,related_name="alumnos_habilitados")
+    lote=models.CharField(max_length=60,blank=True)
+    creado_en=models.DateTimeField(auto_now_add=True)
+    def save(self,*args,**kwargs):
+        self.rut=validar_rut(self.rut)
+        return super().save(*args,**kwargs)
+    def __str__(self): return f"{self.nombre} {self.apellido} ({self.rut})"
 
 class Asistente(models.Model):
     TIPOS = [(x,x.title()) for x in ("estudiante","docente","funcionario","externo")]
