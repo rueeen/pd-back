@@ -1,7 +1,8 @@
-from datetime import timedelta, time
+from datetime import datetime, timedelta, time
 from unittest.mock import patch
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -79,6 +80,61 @@ class TorneoTests(TestCase):
         Torneo.objects.create(nombre="Consolas",slug="consola",juego="Game",modalidad="individual",jugadores_por_equipo=1,cupo_equipos=32,bloque="bloque-1",equipamiento="consola",hora_inicio=time(11),hora_fin=time(12),cierre_inscripciones=timezone.now()+timedelta(days=1))
         response=self._admin().patch("/api/admin/torneos/test/",{"cupo_equipos":4},format="json")
         self.assertEqual(response.status_code,200); self.assertIn("30 estaciones",response.data["advertencia"])
+
+    def test_cargar_torneos_dos_veces_deja_cuatro_sin_duplicar(self):
+        call_command("cargar_torneos")
+        call_command("cargar_torneos")
+
+        self.assertEqual(Torneo.objects.count(),4)
+        self.assertSetEqual(
+            set(Torneo.objects.values_list("slug",flat=True)),
+            {"mario-kart","valorant","smash","lol-aram"},
+        )
+
+    def test_bloques_cargados_controlan_conflictos_de_inscripcion(self):
+        call_command("cargar_torneos")
+        mario=Torneo.objects.get(slug="mario-kart")
+        smash=Torneo.objects.get(slug="smash")
+        participante=attendee(_rut_valido(0),"Ada")
+        equipo=Equipo.objects.create(torneo=mario,nombre="Kart Ada",capitan=participante,estado="confirmado")
+        Integrante.objects.create(equipo=equipo,asistente=participante)
+
+        with patch("torneos.models.timezone.now",return_value=timezone.make_aware(datetime(2026,9,15))):
+            response=APIClient().post(
+                "/api/torneos/valorant/inscripcion/",
+                {"nombre_equipo":"Valorant Ada","integrantes":[{"rut":participante.rut}]+[{"rut":attendee(_rut_valido(i),f"Jugador {i}").rut} for i in range(1,5)]},
+                format="json",
+            )
+            self.assertEqual(response.status_code,400)
+            self.assertIn("Mario Kart 8 Deluxe",str(response.data))
+
+            response=APIClient().post(
+                "/api/torneos/smash/inscripcion/",
+                {"nombre_equipo":"Smash Ada","integrantes":[{"rut":participante.rut}]},
+                format="json",
+            )
+            self.assertEqual(response.status_code,201)
+
+            response=APIClient().post(
+                "/api/torneos/lol-aram/inscripcion/",
+                {"nombre_equipo":"League Ada","integrantes":[{"rut":participante.rut}]+[{"rut":attendee(_rut_valido(i),f"Jugador {i}").rut} for i in range(5,9)]},
+                format="json",
+            )
+            self.assertEqual(response.status_code,400)
+            self.assertIn("Super Smash Bros. Ultimate",str(response.data))
+
+    def test_cargar_torneos_conserva_estado_y_llave_publicada(self):
+        call_command("cargar_torneos")
+        torneo=Torneo.objects.get(slug="valorant")
+        torneo.estado="cerrado"
+        torneo.llave_publicada=True
+        torneo.save(update_fields=["estado","llave_publicada"])
+
+        call_command("cargar_torneos")
+
+        torneo.refresh_from_db()
+        self.assertEqual(torneo.estado,"cerrado")
+        self.assertTrue(torneo.llave_publicada)
     def test_bracket_tres_equipos_propaga_bye(self):
         t=tournament(); teams=[team(t,"A","12345678-5"),team(t,"B","11111111-1"),team(t,"C","22222222-2")]
         t.estado="cerrado"; t.save(update_fields=["estado"])
