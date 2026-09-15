@@ -15,6 +15,7 @@ class ConfiguracionEvento(models.Model):
     completos_por_asistente=models.PositiveSmallIntegerField(default=2)
     mensaje_cupos_agotados=models.TextField(blank=True,default="")
     registro_restringido=models.BooleanField(default=False)
+    restriccion_todos_los_tipos=models.BooleanField(default=False)
     areas_prioritarias=models.ManyToManyField("Area",blank=True,related_name="configuraciones_prioritarias")
 
     @classmethod

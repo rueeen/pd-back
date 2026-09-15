@@ -53,27 +53,34 @@ class RegistroView(APIView):
             if not configuracion.registro_abierto or Asistente.objects.count() >= configuracion.cupo_asistentes:
                 detail=configuracion.mensaje_cupos_agotados or "Los cupos para el evento se agotaron."
                 return Response({"detail":detail},status=status.HTTP_409_CONFLICT)
-            if configuracion.registro_restringido and s.validated_data.get("tipo") == "estudiante":
+            sujeto_al_padron=(
+                configuracion.restriccion_todos_los_tipos
+                or s.validated_data.get("tipo") == "estudiante"
+            )
+            if configuracion.registro_restringido and sujeto_al_padron:
                 alumno=AlumnoHabilitado.objects.select_related("carrera__area").filter(rut=s.validated_data["rut"]).first()
                 areas=set(configuracion.areas_prioritarias.values_list("pk",flat=True))
-                if alumno is None or (areas and (alumno.carrera_id is None or alumno.carrera.area_id not in areas)):
+                if alumno is None or (areas and alumno.carrera_id is not None and alumno.carrera.area_id not in areas):
                     return Response({"detail":MENSAJE_REGISTRO_RESTRINGIDO},status=status.HTTP_403_FORBIDDEN)
             asistente=s.save(completos_asignados=configuracion.completos_por_asistente)
         return Response(AsistenteSerializer(asistente).data,status=status.HTTP_201_CREATED)
 
-def _datos_configuracion(configuracion, incluir_nombres_areas=False):
+def _datos_configuracion(configuracion, incluir_nombres_areas=False, incluir_restriccion_todos=False):
     registrados=Asistente.objects.count()
     areas=configuracion.areas_prioritarias.order_by("orden","nombre")
     if incluir_nombres_areas:
         areas_prioritarias=list(areas.values("slug","nombre"))
     else:
         areas_prioritarias=list(areas.values_list("slug",flat=True))
-    return {"registro_abierto":configuracion.registro_abierto,"cupo_asistentes":configuracion.cupo_asistentes,
+    data={"registro_abierto":configuracion.registro_abierto,"cupo_asistentes":configuracion.cupo_asistentes,
             "registrados":registrados,"cupos_disponibles":max(0,configuracion.cupo_asistentes-registrados),
             "completos_por_asistente":configuracion.completos_por_asistente,
             "mensaje_cupos_agotados":configuracion.mensaje_cupos_agotados,
             "registro_restringido":configuracion.registro_restringido,
             "areas_prioritarias":areas_prioritarias}
+    if incluir_restriccion_todos:
+        data["restriccion_todos_los_tipos"]=configuracion.restriccion_todos_los_tipos
+    return data
 
 MENSAJE_REGISTRO_RESTRINGIDO = "Las inscripciones están abiertas por ahora a un grupo de carreras y se abrirán al resto más adelante."
 
@@ -96,7 +103,7 @@ class ConfiguracionEventoView(APIView):
 
 class AdminConfiguracionEventoView(APIView):
     permission_classes=[IsAuthenticated]
-    def get(self,request): return Response(_datos_configuracion(ConfiguracionEvento.obtener()))
+    def get(self,request): return Response(_datos_configuracion(ConfiguracionEvento.obtener(),incluir_restriccion_todos=True))
     @transaction.atomic
     def patch(self,request):
         configuracion=ConfiguracionEvento.objects.select_for_update().get_or_create(pk=1)[0]
@@ -110,7 +117,7 @@ class AdminConfiguracionEventoView(APIView):
             nuevo=configuracion.completos_por_asistente
             sin_actualizar=Asistente.objects.filter(completos_retirados__gt=nuevo).count()
             Asistente.objects.filter(completos_retirados__lte=nuevo).update(completos_asignados=nuevo)
-        data=_datos_configuracion(configuracion)
+        data=_datos_configuracion(configuracion,incluir_restriccion_todos=True)
         if cambia_completos and aplicar: data["sin_actualizar"]=sin_actualizar
         return Response(data)
 class PaseView(APIView):
