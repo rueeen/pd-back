@@ -91,6 +91,30 @@ class TorneoTests(TestCase):
             {"mario-kart","valorant","smash","lol-aram"},
         )
 
+    def test_cargar_torneos_configura_los_horarios_ampliados(self):
+        call_command("cargar_torneos")
+
+        horarios={
+            "mario-kart":(time(11),time(12,30)),
+            "valorant":(time(11),time(12,30)),
+            "smash":(time(13),time(14,45)),
+            "lol-aram":(time(13),time(14,45)),
+        }
+        for slug,horario in horarios.items():
+            torneo=Torneo.objects.get(slug=slug)
+            self.assertEqual((torneo.hora_inicio,torneo.hora_fin),horario)
+
+    def test_cargar_torneos_conserva_cupo_ampliado_desde_el_panel(self):
+        call_command("cargar_torneos")
+        torneo=Torneo.objects.get(slug="smash")
+        torneo.cupo_equipos=28
+        torneo.save(update_fields=["cupo_equipos"])
+
+        call_command("cargar_torneos")
+
+        torneo.refresh_from_db()
+        self.assertEqual(torneo.cupo_equipos,28)
+
     def test_bloques_cargados_controlan_conflictos_de_inscripcion(self):
         call_command("cargar_torneos")
         mario=Torneo.objects.get(slug="mario-kart")
@@ -124,17 +148,19 @@ class TorneoTests(TestCase):
             self.assertIn("Super Smash Bros. Ultimate",str(response.data))
 
     def test_cargar_torneos_conserva_estado_y_llave_publicada(self):
-        call_command("cargar_torneos")
-        torneo=Torneo.objects.get(slug="valorant")
-        torneo.estado="cerrado"
-        torneo.llave_publicada=True
-        torneo.save(update_fields=["estado","llave_publicada"])
+        for estado in ("cerrado","sorteado"):
+            with self.subTest(estado=estado):
+                call_command("cargar_torneos")
+                torneo=Torneo.objects.get(slug="valorant")
+                torneo.estado=estado
+                torneo.llave_publicada=True
+                torneo.save(update_fields=["estado","llave_publicada"])
 
-        call_command("cargar_torneos")
+                call_command("cargar_torneos")
 
-        torneo.refresh_from_db()
-        self.assertEqual(torneo.estado,"cerrado")
-        self.assertTrue(torneo.llave_publicada)
+                torneo.refresh_from_db()
+                self.assertEqual(torneo.estado,estado)
+                self.assertTrue(torneo.llave_publicada)
     def test_bracket_tres_equipos_propaga_bye(self):
         t=tournament(); teams=[team(t,"A","12345678-5"),team(t,"B","11111111-1"),team(t,"C","22222222-2")]
         t.estado="cerrado"; t.save(update_fields=["estado"])
