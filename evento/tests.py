@@ -104,6 +104,19 @@ class CatalogoTests(TestCase):
         self.assertNotIn("area-dos",catalogo)
         self.assertEqual(catalogo["area-uno"]["carreras"],[])
 
+    def test_configuracion_publica_incluye_areas_prioritarias_ordenadas(self):
+        config=ConfiguracionEvento.obtener()
+        self.assertEqual(APIClient().get("/api/configuracion/").data["areas_prioritarias"],[])
+
+        config.areas_prioritarias.add(self.otra,self.area)
+        response=APIClient().get("/api/configuracion/")
+
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.data["areas_prioritarias"],[
+            {"slug":"area-uno","nombre":"Área uno"},
+            {"slug":"area-dos","nombre":"Área dos"},
+        ])
+
     def test_cargar_carreras_es_idempotente(self):
         Carrera.objects.all().delete(); Area.objects.all().delete()
         call_command("cargar_carreras"); call_command("cargar_carreras")
