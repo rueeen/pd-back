@@ -267,7 +267,77 @@ def test_walkover_y_marcadores_son_excluyentes():
     client=APIClient(); client.force_authenticate(user)
     response=client.patch(f"/api/admin/partidas/{partida.pk}/resultado/",{"walkover":"a","score_a":1,"score_b":0},format="json")
     assert response.status_code==400
+    assert set(response.data)=={"detail"}
+    assert isinstance(response.data["detail"],str)
     partida.refresh_from_db(); assert partida.estado=="pendiente"
+
+@pytest.mark.django_db
+def test_errores_de_resultado_tienen_detail_y_no_una_lista_suelta():
+    t=tournament(); teams=[team(t,chr(65+i),_rut_valido(i)) for i in range(4)]
+    t.estado="cerrado"; t.save(update_fields=["estado"])
+    with patch("torneos.services.random.shuffle",lambda x:None): generar_bracket(t)
+    partida=t.partidas.get(ronda=1,orden=0)
+    incompleta=Partida.objects.create(torneo=t,ronda=9,orden=0,equipo_a=teams[0])
+    user=get_user_model().objects.create_user("admin"); client=APIClient(); client.force_authenticate(user)
+
+    casos=[
+        (partida,{"score_a":1,"score_b":1},"empate"),
+        (incompleta,{"score_a":1,"score_b":0},"ambos equipos"),
+        (partida,{"walkover":"a","score_a":1,"score_b":0},"formas excluyentes"),
+        (partida,{"walkover":"otro"},"walkover debe ser"),
+        (partida,{"score_a":"no-es-entero","score_b":0},"deben ser enteros"),
+        (partida,{"score_a":1},"deben ser enteros"),
+    ]
+    for objetivo,payload,mensaje in casos:
+        response=client.patch(f"/api/admin/partidas/{objetivo.pk}/resultado/",payload,format="json")
+        assert response.status_code==400
+        assert set(response.data)=={"detail"}
+        assert isinstance(response.data["detail"],str)
+        assert mensaje in response.data["detail"]
+
+@pytest.mark.django_db
+def test_corregir_final_requiere_reabrir_y_conserva_llave_publicada():
+    t=tournament(); team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1))
+    t.estado="cerrado"; t.save(update_fields=["estado"])
+    with patch("torneos.services.random.shuffle",lambda x:None): generar_bracket(t)
+    final=t.partidas.get(); ganador_nuevo=final.equipo_b
+    registrar_resultado(final,1,0)
+    user=get_user_model().objects.create_user("admin"); client=APIClient(); client.force_authenticate(user)
+
+    response=client.patch(f"/api/admin/partidas/{final.pk}/resultado/",{"score_a":0,"score_b":1},format="json")
+    assert response.status_code==400
+    assert set(response.data)=={"detail"}
+    assert "reabrirlo explícitamente" in response.data["detail"]
+
+    response=client.patch(f"/api/admin/partidas/{final.pk}/resultado/",{"score_a":0,"score_b":1,"reabrir":True},format="json")
+    assert response.status_code==200
+    final.refresh_from_db(); t.refresh_from_db()
+    assert final.ganador==ganador_nuevo
+    assert t.estado=="finalizado"
+    assert t.llave_publicada is True
+
+@pytest.mark.django_db
+def test_corregir_ronda_anterior_reabre_hasta_registrar_la_final():
+    t=tournament(); [team(t,chr(65+i),_rut_valido(i)) for i in range(4)]
+    t.estado="cerrado"; t.save(update_fields=["estado"])
+    with patch("torneos.services.random.shuffle",lambda x:None): generar_bracket(t)
+    semifinales=list(t.partidas.filter(ronda=1))
+    for semifinal in semifinales: registrar_resultado(semifinal,1,0)
+    final=t.partidas.get(ronda=2); registrar_resultado(final,1,0)
+    user=get_user_model().objects.create_user("admin"); client=APIClient(); client.force_authenticate(user)
+
+    response=client.patch(f"/api/admin/partidas/{semifinales[0].pk}/resultado/",{"score_a":0,"score_b":1,"reabrir":True},format="json")
+    assert response.status_code==200
+    t.refresh_from_db(); final.refresh_from_db()
+    assert t.estado=="en_curso"
+    assert t.llave_publicada is True
+    assert final.estado=="pendiente"
+
+    response=client.patch(f"/api/admin/partidas/{final.pk}/resultado/",{"score_a":1,"score_b":0},format="json")
+    assert response.status_code==200
+    t.refresh_from_db()
+    assert t.estado=="finalizado"
+    assert t.llave_publicada is True
 
 @pytest.mark.django_db
 def test_bracket_no_publicado_oculta_equipos_y_rondas():
