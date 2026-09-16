@@ -26,6 +26,7 @@ class ExplainedAnonRateThrottle(AnonRateThrottle):
         if super().allow_request(request, view): return True
         raise Throttled(wait=self.wait(), detail=self.message)
 class RegistrationThrottle(ExplainedAnonRateThrottle): scope="registration"
+class VerificationThrottle(ExplainedAnonRateThrottle): scope="verificacion"
 class PassRecoveryThrottle(ExplainedAnonRateThrottle): scope="pass_recovery"
 class PadronThrottle(ExplainedAnonRateThrottle): scope="padron"
 class CatalogoAreasView(APIView):
@@ -64,6 +65,16 @@ class RegistroView(APIView):
                     return Response({"detail":MENSAJE_REGISTRO_RESTRINGIDO},status=status.HTTP_403_FORBIDDEN)
             asistente=s.save(completos_asignados=configuracion.completos_por_asistente)
         return Response(AsistenteSerializer(asistente).data,status=status.HTTP_201_CREATED)
+
+class VerificarAsistenteView(APIView):
+    permission_classes=[AllowAny]; throttle_classes=[VerificationThrottle]
+    def post(self,request):
+        try:
+            rut=normalizar_rut(request.data.get("rut",""))
+            validar_rut(rut)
+        except DjangoValidationError:
+            return Response({"detail":"El RUT no es válido."},status=status.HTTP_400_BAD_REQUEST)
+        return Response({"registrado":Asistente.objects.filter(rut=rut).exists()})
 
 def _datos_configuracion(configuracion, incluir_nombres_areas=False, incluir_restriccion_todos=False):
     registrados=Asistente.objects.count()
