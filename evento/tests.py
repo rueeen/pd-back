@@ -15,6 +15,30 @@ def attendee(rut="12345678-5",name="Ada"):
     return Asistente.objects.create(nombre=name,apellido="Lovelace",rut=rut,email="ada@example.com",tipo="externo")
 
 class EventoTests(TestCase):
+    def test_verificar_asistente_registrado_solo_devuelve_booleano(self):
+        attendee("13356394-6")
+        response=APIClient().post("/api/asistentes/verificar/",{"rut":"133563946"},format="json")
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.data,{"registrado":True})
+
+    def test_verificar_asistente_no_registrado_devuelve_falso(self):
+        response=APIClient().post("/api/asistentes/verificar/",{"rut":"13.356.394-6"},format="json")
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.data,{"registrado":False})
+
+    def test_verificar_asistente_rechaza_rut_invalido(self):
+        response=APIClient().post("/api/asistentes/verificar/",{"rut":"13.356.394-7"},format="json")
+        self.assertEqual(response.status_code,400)
+        self.assertIn("no es válido",response.data["detail"])
+
+    def test_verificar_asistente_acepta_variantes_de_formato(self):
+        attendee("10000013-K")
+        for rut in ("10.000.013-K","10000013-K","10000013K","10.000.013-k"):
+            with self.subTest(rut=rut):
+                response=APIClient().post("/api/asistentes/verificar/",{"rut":rut},format="json")
+                self.assertEqual(response.status_code,200)
+                self.assertEqual(response.data,{"registrado":True})
+
     def test_cupo_rechaza_nuevo_pero_permite_recuperar_existente(self):
         existing=attendee(); config=ConfiguracionEvento.obtener(); config.cupo_asistentes=1; config.save()
         client=APIClient()
