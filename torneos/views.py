@@ -17,6 +17,10 @@ from .services import generar_bracket, registrar_resultado
 
 class TeamManagementThrottle(ExplainedAnonRateThrottle): scope="team_management"
 
+def _validation_error(detail):
+    """Build the consistent error envelope used by tournament administration."""
+    return ValidationError({"detail":detail})
+
 def _nombre_ronda(numero,total):
     distancia=total-numero
     if distancia==0: return "Final"
@@ -72,26 +76,26 @@ class TorneoAdminView(APIView):
         fields=[]; promovidos=[]
         if "llave_publicada" in r.data:
             if not isinstance(r.data["llave_publicada"],bool):
-                raise ValidationError({"llave_publicada":"Debe indicar un booleano."})
+                raise _validation_error("Debe indicar un booleano para llave_publicada.")
             torneo.llave_publicada=r.data["llave_publicada"]; fields.append("llave_publicada")
             if not torneo.llave_publicada and torneo.estado=="sorteado":
                 torneo.estado="cerrado"; fields.append("estado")
         if "cierre_inscripciones" in r.data:
             from django.utils.dateparse import parse_datetime
             cierre=parse_datetime(str(r.data["cierre_inscripciones"]))
-            if cierre is None: raise ValidationError({"cierre_inscripciones":"Ingrese una fecha y hora válidas."})
+            if cierre is None: raise _validation_error("Ingrese una fecha y hora válidas para cierre_inscripciones.")
             if timezone.is_naive(cierre): cierre=timezone.make_aware(cierre)
             if torneo.estado!="inscripcion":
-                raise ValidationError({"cierre_inscripciones":"El plazo solo puede extenderse durante las inscripciones."})
+                raise _validation_error("El plazo solo puede extenderse durante las inscripciones.")
             if cierre<=torneo.cierre_inscripciones:
-                raise ValidationError({"cierre_inscripciones":"La nueva fecha debe ser posterior al cierre actual."})
+                raise _validation_error("La nueva fecha debe ser posterior al cierre actual.")
             torneo.cierre_inscripciones=cierre; fields.append("cierre_inscripciones")
         if "cupo_equipos" in r.data:
             if torneo.estado!="inscripcion":
                 return Response({"detail":"El cupo solo puede ampliarse mientras el torneo está en inscripción."},status=400)
             try: nuevo=int(r.data["cupo_equipos"])
-            except (TypeError,ValueError): raise ValidationError({"cupo_equipos":"Debe ser un entero positivo."})
-            if nuevo < 1: raise ValidationError({"cupo_equipos":"Debe ser un entero positivo."})
+            except (TypeError,ValueError): raise _validation_error("cupo_equipos debe ser un entero positivo.")
+            if nuevo < 1: raise _validation_error("cupo_equipos debe ser un entero positivo.")
             anterior=torneo.cupo_equipos; torneo.cupo_equipos=nuevo; fields.append("cupo_equipos")
             if nuevo<=anterior:
                 return Response({"detail":"El nuevo cupo debe ser mayor al cupo actual."},status=400)
@@ -101,7 +105,7 @@ class TorneoAdminView(APIView):
                 equipo.estado="confirmado"; equipo.save(update_fields=["estado"])
                 PromocionEspera.objects.create(torneo=torneo,equipo=equipo)
                 promovidos.append({"id":equipo.pk,"nombre":equipo.nombre,"capitan":f"{equipo.capitan.nombre} {equipo.capitan.apellido}"})
-        if not fields: raise ValidationError("Debe indicar cupo_equipos, cierre_inscripciones o llave_publicada.")
+        if not fields: raise _validation_error("Debe indicar cupo_equipos, cierre_inscripciones o llave_publicada.")
         torneo.save(update_fields=list(dict.fromkeys(fields)))
         data={"slug":torneo.slug,"cupo_equipos":torneo.cupo_equipos,"cierre_inscripciones":torneo.cierre_inscripciones,
               "llave_publicada":torneo.llave_publicada,"equipos_promovidos":promovidos}
@@ -134,7 +138,7 @@ class SorteoView(APIView):
     permission_classes=[IsAuthenticated]
     def post(self,r,slug):
         solo_acreditados=r.data.get("solo_acreditados",False)
-        if not isinstance(solo_acreditados,bool): raise ValidationError({"solo_acreditados":"Debe ser un booleano."})
+        if not isinstance(solo_acreditados,bool): raise _validation_error("solo_acreditados debe ser un booleano.")
         try: t=generar_bracket(get_object_or_404(Torneo,slug=slug),solo_acreditados=solo_acreditados)
         except DjangoValidationError as e: return Response({"detail":e.messages[0]},status=status.HTTP_400_BAD_REQUEST)
         return Response({"estado":t.estado,"partidas":t.partidas.count()})
@@ -143,14 +147,14 @@ class ResultadoView(APIView):
     def patch(self,r,pk):
         walkover=r.data.get("walkover")
         if "walkover" in r.data and ("score_a" in r.data or "score_b" in r.data):
-            raise ValidationError("walkover y los marcadores son formas excluyentes de cerrar una partida.")
+            raise _validation_error("walkover y los marcadores son formas excluyentes de cerrar una partida.")
         try:
             if "walkover" in r.data:
                 p=registrar_resultado(get_object_or_404(Partida,pk=pk),usuario=r.user,reabrir=r.data.get("reabrir") is True,walkover=walkover)
             else:
                 p=registrar_resultado(get_object_or_404(Partida,pk=pk),int(r.data["score_a"]),int(r.data["score_b"]),r.user,reabrir=r.data.get("reabrir") is True)
-        except (KeyError,TypeError,ValueError): raise ValidationError("score_a y score_b deben ser enteros.")
-        except DjangoValidationError as e: raise ValidationError(e.messages)
+        except (KeyError,TypeError,ValueError): raise _validation_error("score_a y score_b deben ser enteros.")
+        except DjangoValidationError as e: raise _validation_error(e.messages[0])
         return Response(PartidaSerializer(p).data)
 class EquipoAdminView(APIView):
     permission_classes=[IsAuthenticated]
