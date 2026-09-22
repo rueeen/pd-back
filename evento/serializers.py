@@ -26,6 +26,21 @@ class AsistenteSerializer(serializers.ModelSerializer):
         if errors: raise serializers.ValidationError(errors)
         return attrs
 
+class AsistenteAdminListaSerializer(serializers.ModelSerializer):
+    area=serializers.SlugRelatedField(slug_field="slug",read_only=True)
+    carrera=serializers.SlugRelatedField(slug_field="slug",read_only=True)
+    area_nombre=serializers.CharField(source="area.nombre",read_only=True,allow_null=True)
+    carrera_nombre=serializers.CharField(source="carrera.nombre",read_only=True,allow_null=True)
+    completos_disponibles=serializers.IntegerField(read_only=True)
+    en_padron=serializers.SerializerMethodField(); torneos=serializers.SerializerMethodField()
+    class Meta:
+        model=Asistente
+        fields=["codigo","nombre","apellido","rut","email","telefono","tipo","area","area_nombre","carrera","carrera_nombre","aporte","completos_asignados","completos_retirados","completos_disponibles","creado_en","en_padron","torneos"]
+        read_only_fields=fields
+    def get_en_padron(self,obj): return obj.rut in self.context.get("ruts_padron",set())
+    def get_torneos(self,obj):
+        return [{"slug":p.equipo.torneo.slug,"nombre":p.equipo.torneo.nombre,"equipo":p.equipo.nombre,"estado_equipo":p.equipo.estado} for p in obj.participaciones_activas]
+
 class CarreraCatalogoSerializer(serializers.ModelSerializer):
     class Meta: model=Carrera; fields=["slug","nombre"]
 

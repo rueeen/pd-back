@@ -1,11 +1,15 @@
 from unittest.mock import patch
 import importlib.util
 import io
+from datetime import timedelta
 from unittest import skipUnless
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command, CommandError
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
+from django.db import connection
+from django.utils import timezone
 from rest_framework.test import APIClient
 from .models import AlumnoHabilitado, Area, Asistente, Carrera, ConfiguracionEvento
 from .services import registrar_retiro
@@ -246,6 +250,57 @@ class DatosPruebaTests(TestCase):
         with self.settings(DEBUG=False):
             with self.assertRaisesMessage(CommandError,"DEBUG=False"):
                 call_command("datos_prueba",limpiar=True)
+
+
+class AdminAsistentesListadoTests(TestCase):
+    def setUp(self):
+        from torneos.models import Equipo, Integrante, Torneo
+        self.client=APIClient(); self.user=get_user_model().objects.create_user("admin-listado")
+        self.area=Area.objects.create(nombre="Ingeniería",slug="ingenieria",orden=1)
+        self.otra_area=Area.objects.create(nombre="Salud",slug="salud",orden=2)
+        self.carrera=Carrera.objects.create(area=self.area,nombre="Informática",slug="informatica")
+        self.otra_carrera=Carrera.objects.create(area=self.otra_area,nombre="Enfermería",slug="enfermeria")
+        self.ana=Asistente.objects.create(nombre="Ana",apellido="Zuluaga",rut=_rut_valido_registro(1),email="correo.busqueda@example.com",tipo="estudiante",area=self.area,carrera=self.carrera)
+        self.bea=Asistente.objects.create(nombre="Bea",apellido="Alarcón",rut=_rut_valido_registro(2),email="bea@example.com",tipo="docente",area=self.otra_area,carrera=self.otra_carrera)
+        self.torneo=Torneo.objects.create(nombre="Ajedrez",slug="ajedrez",juego="Ajedrez",modalidad="individual",jugadores_por_equipo=1,cupo_equipos=20,hora_inicio="10:00",hora_fin="12:00",cierre_inscripciones=timezone.now()+timedelta(days=1))
+        activo=Equipo.objects.create(torneo=self.torneo,nombre="Activo",capitan=self.ana,estado="confirmado")
+        retirado=Equipo.objects.create(torneo=self.torneo,nombre="Retirado",capitan=self.bea,estado="retirado")
+        Integrante.objects.create(equipo=activo,asistente=self.ana); Integrante.objects.create(equipo=retirado,asistente=self.bea)
+
+    def get(self,params=None):
+        self.client.force_authenticate(self.user)
+        return self.client.get("/api/admin/asistentes/",params or {})
+
+    def test_exige_autenticacion(self):
+        self.assertEqual(APIClient().get("/api/admin/asistentes/").status_code,401)
+
+    def test_filtros_tipo_area_carrera_y_torneo(self):
+        for params,esperado in (({"tipo":"docente"},self.bea),({"area":"ingenieria"},self.ana),({"carrera":"enfermeria"},self.bea),({"torneo":"ajedrez"},self.ana)):
+            with self.subTest(params=params): self.assertEqual([x["codigo"] for x in self.get(params).data],[esperado.codigo])
+
+    def test_busqueda_por_correo_y_orden_por_apellido(self):
+        self.assertEqual(self.get({"q":"correo.busqueda"}).data[0]["codigo"],self.ana.codigo)
+        self.assertEqual([x["apellido"] for x in self.get({"orden":"apellido"}).data],["Alarcón","Zuluaga"])
+
+    def test_torneos_omite_retirados_y_marca_padron(self):
+        AlumnoHabilitado.objects.create(rut=self.ana.rut,nombre="Ana",apellido="Zuluaga",carrera=self.carrera)
+        data={x["codigo"]:x for x in self.get().data}
+        self.assertEqual(data[self.ana.codigo]["torneos"],[{"slug":"ajedrez","nombre":"Ajedrez","equipo":"Activo","estado_equipo":"confirmado"}])
+        self.assertEqual(data[self.bea.codigo]["torneos"],[])
+        self.assertTrue(data[self.ana.codigo]["en_padron"]); self.assertFalse(data[self.bea.codigo]["en_padron"])
+
+    def test_consultas_no_crecen_con_la_cantidad(self):
+        with CaptureQueriesContext(connection) as queries: self.get()
+        cantidad_dos=len(queries)
+        for i in range(3,7):
+            Asistente.objects.create(nombre=f"Nombre {i}",apellido="Prueba",rut=_rut_valido_registro(i),email=f"a{i}@example.com",tipo="externo")
+        with CaptureQueriesContext(connection) as queries: self.get()
+        self.assertEqual(len(queries),cantidad_dos)
+
+    def test_csv_respeta_filtro_e_incluye_correo(self):
+        self.client.force_authenticate(self.user)
+        contenido=self.client.get("/api/admin/asistentes/exportar/",{"tipo":"docente"}).content.decode("utf-8-sig")
+        self.assertIn("correo",contenido.splitlines()[1]); self.assertIn(self.bea.email,contenido); self.assertNotIn(self.ana.email,contenido)
 
 
 def _rut_valido_registro(numero):
