@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from evento.models import Asistente
@@ -32,6 +33,16 @@ class Integrante(models.Model):
     asistente=models.ForeignKey(Asistente,on_delete=models.PROTECT,related_name="participaciones")
     gamertag=models.CharField(max_length=60,blank=True)
     class Meta: unique_together=[("equipo","asistente")]
+class CambioIntegrante(models.Model):
+    MOTIVOS=[("no_se_presento","No se presentó"),("problema","Problema en el momento"),("otro","Otro")]
+    equipo=models.ForeignKey(Equipo,on_delete=models.CASCADE,related_name="cambios")
+    saliente=models.ForeignKey(Asistente,on_delete=models.PROTECT,related_name="+")
+    entrante=models.ForeignKey(Asistente,on_delete=models.PROTECT,related_name="+")
+    motivo=models.CharField(max_length=20,choices=MOTIVOS)
+    detalle=models.CharField(max_length=200,blank=True)
+    realizado_por=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True)
+    creado_en=models.DateTimeField(auto_now_add=True)
+    class Meta: ordering=["-creado_en"]
 class PromocionEspera(models.Model):
     torneo=models.ForeignKey(Torneo,on_delete=models.CASCADE,related_name="promociones")
     equipo=models.ForeignKey(Equipo,on_delete=models.PROTECT,related_name="promociones")

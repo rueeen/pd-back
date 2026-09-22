@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import Q
 import math
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -13,7 +14,7 @@ from evento.validators import normalizar_rut
 from evento.views import ExplainedAnonRateThrottle
 from .models import Equipo, Integrante, Partida, PromocionEspera, Torneo
 from .serializers import *
-from .services import generar_bracket, registrar_resultado
+from .services import generar_bracket, registrar_resultado, reemplazar_integrante
 
 class TeamManagementThrottle(ExplainedAnonRateThrottle): scope="team_management"
 
@@ -31,7 +32,8 @@ def _nombre_ronda(numero,total):
 def _datos_bracket(torneo,admin=False):
     matches=PartidaSerializer(torneo.partidas.all(),many=True).data
     rondas=sorted({x["ronda"] for x in matches}); total=max(rondas,default=0)
-    equipos=lambda estado: (EquipoAdminSerializer(torneo.equipos.filter(estado=estado),many=True).data
+    equipos=lambda estado: (EquipoAdminSerializer(torneo.equipos.filter(estado=estado).select_related("capitan").prefetch_related(
+                                "integrantes__asistente","cambios__saliente","cambios__entrante","cambios__realizado_por"),many=True).data
                             if admin else list(torneo.equipos.filter(estado=estado).values("id","nombre")))
     return {"torneo":torneo.nombre,"slug":torneo.slug,"estado":torneo.estado,
             "horario":f"{torneo.hora_inicio:%H:%M} – {torneo.hora_fin:%H:%M}",
@@ -158,20 +160,68 @@ class ResultadoView(APIView):
         return Response(PartidaSerializer(p).data)
 class EquipoAdminView(APIView):
     permission_classes=[IsAuthenticated]
+    @transaction.atomic
     def patch(self,r,pk):
-        team=get_object_or_404(Equipo,pk=pk); fields=[]
+        team=get_object_or_404(Equipo.objects.select_for_update().select_related("torneo"),pk=pk); fields=[]
         if "estado" in r.data:
             state=r.data["estado"]
-            if state not in dict(Equipo.ESTADOS): raise ValidationError("Estado inválido.")
+            if state not in dict(Equipo.ESTADOS): raise _validation_error("Estado inválido.")
             team.estado=state; fields.append("estado")
         if "acreditado" in r.data:
             acreditado=r.data["acreditado"]
-            if not isinstance(acreditado,bool): raise ValidationError("acreditado debe ser un booleano.")
+            if not isinstance(acreditado,bool): raise _validation_error("acreditado debe ser un booleano.")
             team.acreditado=acreditado; team.acreditado_en=timezone.now() if acreditado else None
             fields.extend(["acreditado","acreditado_en"])
-        if not fields: raise ValidationError("Debe indicar estado o acreditado.")
+        if "nombre" in r.data:
+            nombre=str(r.data["nombre"]).strip()
+            if not nombre: raise _validation_error("El nombre del equipo no puede estar vacío.")
+            if Equipo.objects.filter(torneo=team.torneo,nombre__iexact=nombre).exclude(pk=team.pk).exists():
+                raise _validation_error("El nombre ya está tomado en ese torneo, elige otro.")
+            team.nombre=nombre; fields.append("nombre")
+        if "capitan_rut" in r.data:
+            try: rut=normalizar_rut(r.data["capitan_rut"])
+            except DjangoValidationError as e: raise _validation_error(e.messages[0])
+            integrante=team.integrantes.select_related("asistente").filter(asistente__rut=rut).first()
+            if not integrante: raise _validation_error("El nuevo capitán debe ser integrante del equipo.")
+            team.capitan=integrante.asistente; fields.append("capitan")
+        if not fields: raise _validation_error("Debe indicar estado, acreditado, nombre o capitan_rut.")
         team.save(update_fields=fields)
-        return Response({"id":team.pk,"estado":team.estado,"acreditado":team.acreditado,"acreditado_en":team.acreditado_en})
+        return Response({"id":team.pk,"estado":team.estado,"acreditado":team.acreditado,"acreditado_en":team.acreditado_en,
+                         "nombre":team.nombre,"capitan_rut":team.capitan.rut})
+
+class ReemplazoIntegranteView(APIView):
+    permission_classes=[IsAuthenticated]
+    def post(self,r,pk):
+        equipo=get_object_or_404(Equipo,pk=pk)
+        forzar=r.data.get("forzar",False)
+        if not isinstance(forzar,bool): raise _validation_error("forzar debe ser un booleano.")
+        faltantes=[campo for campo in ("rut_saliente","rut_entrante","motivo") if campo not in r.data]
+        if faltantes: raise _validation_error(f"Debe indicar {', '.join(faltantes)}.")
+        try:
+            equipo=reemplazar_integrante(equipo,r.data["rut_saliente"],r.data["rut_entrante"],r.user,r.data["motivo"],
+                                         r.data.get("detalle",""),r.data.get("gamertag",""),r.data.get("nombre_equipo"),forzar)
+        except DjangoValidationError as e: raise _validation_error(e.messages[0])
+        equipo=Equipo.objects.select_related("capitan").prefetch_related(
+            "integrantes__asistente","cambios__saliente","cambios__entrante","cambios__realizado_por").get(pk=equipo.pk)
+        return Response(EquipoAdminSerializer(equipo).data)
+
+class CandidatosComodinView(APIView):
+    permission_classes=[IsAuthenticated]
+    def get(self,r,slug):
+        torneo=get_object_or_404(Torneo,slug=slug); q=str(r.query_params.get("q","")).strip()
+        if len(q)<2: return Response([])
+        ocupados=Integrante.objects.filter(equipo__torneo=torneo).exclude(equipo__estado="retirado").values_list("asistente_id",flat=True)
+        candidatos=list(Asistente.objects.select_related("carrera").filter(
+            Q(nombre__icontains=q)|Q(apellido__icontains=q)|Q(rut__icontains=q)|Q(codigo__icontains=q)
+        ).exclude(pk__in=ocupados).order_by("apellido","nombre")[:20])
+        conflictos={}
+        if torneo.bloque:
+            participaciones=(Integrante.objects.select_related("equipo__torneo").filter(
+                asistente_id__in=[a.pk for a in candidatos],equipo__torneo__bloque=torneo.bloque
+            ).exclude(equipo__torneo=torneo).exclude(equipo__estado="retirado").order_by("pk"))
+            for integrante in participaciones: conflictos.setdefault(integrante.asistente_id,integrante.equipo.torneo.nombre)
+        return Response([{"rut":a.rut,"nombre":a.nombre,"apellido":a.apellido,"codigo":a.codigo,"tipo":a.tipo,
+                          "carrera_nombre":a.carrera.nombre if a.carrera else None,"conflicto_bloque":conflictos.get(a.pk)} for a in candidatos])
 
 def _autorizar_capitan(equipo,data):
     codigo=str(data.get("codigo_capitan","")).upper()
