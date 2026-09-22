@@ -16,7 +16,7 @@ from rest_framework.exceptions import Throttled
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from .models import AlumnoHabilitado, Area, Asistente, Carrera, ConfiguracionEvento, RetiroCompleto
-from .serializers import AreaCatalogoSerializer, AsistenteSerializer, ConfiguracionEventoSerializer, PaseSerializer, RetiroSerializer
+from .serializers import AreaCatalogoSerializer, AsistenteAdminListaSerializer, AsistenteSerializer, ConfiguracionEventoSerializer, PaseSerializer, RetiroSerializer
 from .services import registrar_retiro
 from .validators import normalizar_rut, validar_rut
 
@@ -144,21 +144,44 @@ class RecuperarPaseView(APIView):
         if not asistente or not email or asistente.email.strip().casefold()!=email.casefold():
             return Response({"detail":detail},status=status.HTTP_404_NOT_FOUND)
         return Response({"codigo":asistente.codigo})
+def _filtrar_asistentes(request):
+    from torneos.models import Integrante
+    participaciones=Integrante.objects.exclude(equipo__estado="retirado").select_related("equipo__torneo")
+    qs=Asistente.objects.select_related("area","carrera").prefetch_related(
+        Prefetch("participaciones",queryset=participaciones,to_attr="participaciones_activas")
+    )
+    q=request.query_params.get("q")
+    if q: qs=qs.filter(Q(nombre__icontains=q)|Q(apellido__icontains=q)|Q(rut__icontains=q)|Q(codigo__icontains=q)|Q(email__icontains=q))
+    if request.query_params.get("con_saldo")=="1": qs=qs.filter(completos_retirados__lt=F("completos_asignados"))
+    tipo=request.query_params.get("tipo")
+    if tipo in dict(Asistente.TIPOS): qs=qs.filter(tipo=tipo)
+    if request.query_params.get("area"): qs=qs.filter(area__slug=request.query_params["area"])
+    if request.query_params.get("carrera"): qs=qs.filter(carrera__slug=request.query_params["carrera"])
+    if request.query_params.get("torneo"):
+        qs=qs.filter(participaciones__equipo__torneo__slug=request.query_params["torneo"],participaciones__equipo__estado__in=("confirmado","espera")).distinct()
+    if request.query_params.get("orden")=="apellido": return qs.order_by("apellido","nombre")
+    return qs.order_by("-creado_en")
+
+def _ruts_padron(qs):
+    return set(AlumnoHabilitado.objects.filter(rut__in=qs.values("rut")).values_list("rut",flat=True))
+
 class AdminAsistentesView(APIView):
     permission_classes=[IsAuthenticated]
     def get(self,request):
-        qs=Asistente.objects.all().order_by("-creado_en"); q=request.query_params.get("q")
-        if q: qs=qs.filter(Q(nombre__icontains=q)|Q(apellido__icontains=q)|Q(rut__icontains=q)|Q(codigo__icontains=q))
-        if request.query_params.get("con_saldo")=="1": qs=qs.filter(completos_retirados__lt=F("completos_asignados"))
-        return Response(AsistenteSerializer(qs,many=True).data)
+        qs=_filtrar_asistentes(request)
+        return Response(AsistenteAdminListaSerializer(qs,many=True,context={"ruts_padron":_ruts_padron(qs)}).data)
 class AdminAsistentesExportView(APIView):
     permission_classes=[IsAuthenticated]
     def get(self,request):
         response=HttpResponse(content_type="text/csv; charset=utf-8"); response["Content-Disposition"]='attachment; filename="asistentes.csv"'; response.write("\ufeff")
         response.write("# Contiene datos personales. La copia impresa debe destruirse al cierre de la jornada.\r\n")
-        writer=csv.writer(response); writer.writerow(["código","nombre","apellido","RUT","tipo","área","carrera","completos asignados","completos retirados"])
-        for a in Asistente.objects.select_related("area","carrera").order_by("apellido","nombre"):
-            writer.writerow([a.codigo,a.nombre,a.apellido,a.rut,a.tipo,a.area.nombre if a.area else "",a.carrera.nombre if a.carrera else "",a.completos_asignados,a.completos_retirados])
+        writer=csv.writer(response); writer.writerow(["código","nombre","apellido","RUT","correo","teléfono","tipo","área","carrera","fecha inscripción","torneos","en padrón","completos asignados","completos retirados"])
+        qs=_filtrar_asistentes(request)
+        if "orden" not in request.query_params: qs=qs.order_by("apellido","nombre")
+        ruts_padron=_ruts_padron(qs)
+        for a in qs:
+            torneos="; ".join(p.equipo.torneo.nombre for p in a.participaciones_activas)
+            writer.writerow([a.codigo,a.nombre,a.apellido,a.rut,a.email,a.telefono,a.tipo,a.area.nombre if a.area else "",a.carrera.nombre if a.carrera else "",timezone.localtime(a.creado_en).strftime("%Y-%m-%d %H:%M"),torneos,"sí" if a.rut in ruts_padron else "no",a.completos_asignados,a.completos_retirados])
         return response
 class AdminAsistenteView(APIView):
     permission_classes=[IsAuthenticated]
