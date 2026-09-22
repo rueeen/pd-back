@@ -3,7 +3,7 @@ from django.db import IntegrityError, transaction
 from rest_framework import serializers
 from evento.models import Asistente
 from evento.validators import normalizar_rut
-from .models import Equipo, Integrante, Partida, Torneo
+from .models import CambioIntegrante, Equipo, Integrante, Partida, Torneo
 
 class IntegrantePublicoSerializer(serializers.ModelSerializer):
     nombre=serializers.SerializerMethodField()
@@ -18,11 +18,25 @@ class IntegranteAdminSerializer(serializers.ModelSerializer):
     nombre=serializers.CharField(source="asistente.nombre",read_only=True)
     apellido=serializers.CharField(source="asistente.apellido",read_only=True)
     codigo=serializers.CharField(source="asistente.codigo",read_only=True)
-    class Meta: model=Integrante; fields=["nombre","apellido","codigo","gamertag"]
+    rut=serializers.CharField(source="asistente.rut",read_only=True)
+    es_capitan=serializers.SerializerMethodField(); es_comodin=serializers.SerializerMethodField()
+    class Meta: model=Integrante; fields=["nombre","apellido","rut","codigo","gamertag","es_capitan","es_comodin"]
+    def get_es_capitan(self,o): return o.equipo.capitan_id==o.asistente_id
+    def get_es_comodin(self,o): return any(c.entrante_id==o.asistente_id for c in o.equipo.cambios.all())
+class CambioIntegranteSerializer(serializers.ModelSerializer):
+    saliente=serializers.SerializerMethodField(); entrante=serializers.SerializerMethodField()
+    motivo_display=serializers.CharField(source="get_motivo_display",read_only=True)
+    realizado_por=serializers.SerializerMethodField()
+    class Meta: model=CambioIntegrante; fields=["saliente","entrante","motivo","motivo_display","detalle","realizado_por","creado_en"]
+    def get_saliente(self,o): return f"{o.saliente.nombre} {o.saliente.apellido}"
+    def get_entrante(self,o): return f"{o.entrante.nombre} {o.entrante.apellido}"
+    def get_realizado_por(self,o):
+        return (o.realizado_por.get_full_name() or o.realizado_por.get_username()) if o.realizado_por else None
 class EquipoAdminSerializer(serializers.ModelSerializer):
     capitan=AsistenteAdminSerializer(read_only=True)
     integrantes=IntegranteAdminSerializer(many=True,read_only=True)
-    class Meta: model=Equipo; fields=["id","nombre","acreditado","capitan","integrantes"]
+    cambios=CambioIntegranteSerializer(many=True,read_only=True)
+    class Meta: model=Equipo; fields=["id","nombre","acreditado","capitan","integrantes","cambios"]
 class TorneoSerializer(serializers.ModelSerializer):
     equipos_confirmados=serializers.IntegerField(read_only=True); cupos_disponibles=serializers.IntegerField(read_only=True); inscripciones_abiertas=serializers.BooleanField(read_only=True)
     class Meta: model=Torneo; fields=["nombre","slug","juego","modalidad","jugadores_por_equipo","cupo_equipos","estado","bloque","equipamiento","hora_inicio","hora_fin","reglas","cierre_inscripciones","equipos_confirmados","cupos_disponibles","inscripciones_abiertas"]

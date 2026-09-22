@@ -1,7 +1,41 @@
 import math, random
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from .models import Equipo, Partida, Torneo
+from evento.models import Asistente
+from evento.validators import normalizar_rut
+from .models import CambioIntegrante, Equipo, Integrante, Partida, Torneo
+
+@transaction.atomic
+def reemplazar_integrante(equipo,rut_saliente,rut_entrante,usuario,motivo,detalle="",gamertag="",nombre_equipo=None,forzar=False):
+    equipo=Equipo.objects.select_for_update().select_related("torneo","capitan").get(pk=equipo.pk)
+    if equipo.torneo.estado=="finalizado": raise ValidationError("El torneo ya finalizó; no se pueden cambiar integrantes.")
+    if equipo.estado=="retirado": raise ValidationError("No se pueden cambiar integrantes de un equipo retirado.")
+    rut_saliente=normalizar_rut(rut_saliente); rut_entrante=normalizar_rut(rut_entrante)
+    if rut_saliente==rut_entrante: raise ValidationError("El integrante saliente y el entrante deben ser distintos.")
+    integrante=Integrante.objects.select_for_update().filter(equipo=equipo,asistente__rut=rut_saliente).first()
+    if not integrante: raise ValidationError(f"El RUT {rut_saliente} no es integrante de este equipo.")
+    entrante=Asistente.objects.filter(rut=rut_entrante).first()
+    if not entrante: raise ValidationError(f"El RUT {rut_entrante} no está registrado; debe registrarse primero al evento.")
+    if Integrante.objects.filter(equipo__torneo=equipo.torneo,asistente=entrante).exclude(equipo__estado="retirado").exclude(pk=integrante.pk).exists():
+        raise ValidationError(f"El asistente con RUT {rut_entrante} ya participa en un equipo de este torneo.")
+    conflicto=(Integrante.objects.select_related("equipo__torneo")
+               .filter(asistente=entrante,equipo__torneo__bloque=equipo.torneo.bloque)
+               .exclude(equipo__torneo=equipo.torneo).exclude(equipo__estado="retirado").first()
+               if equipo.torneo.bloque else None)
+    if conflicto and not forzar:
+        raise ValidationError(f"El asistente con RUT {rut_entrante} ya participa en {conflicto.equipo.torneo.nombre}, que se juega en el mismo bloque.")
+    if motivo not in dict(CambioIntegrante.MOTIVOS): raise ValidationError("Motivo inválido.")
+    nombre=str(nombre_equipo).strip() if nombre_equipo is not None else ""
+    if nombre and Equipo.objects.filter(torneo=equipo.torneo,nombre__iexact=nombre).exclude(pk=equipo.pk).exists():
+        raise ValidationError("El nombre ya está tomado en ese torneo, elige otro.")
+    saliente=integrante.asistente
+    integrante.asistente=entrante; integrante.gamertag=str(gamertag).strip(); integrante.save(update_fields=["asistente","gamertag"])
+    fields=[]
+    if equipo.capitan_id==saliente.pk: equipo.capitan=entrante; fields.append("capitan")
+    if nombre: equipo.nombre=nombre; fields.append("nombre")
+    if fields: equipo.save(update_fields=fields)
+    CambioIntegrante.objects.create(equipo=equipo,saliente=saliente,entrante=entrante,motivo=motivo,detalle=str(detalle).strip(),realizado_por=usuario)
+    return equipo
 
 def _colocar(partida,equipo):
     target=partida.siguiente_partida

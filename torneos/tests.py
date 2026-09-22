@@ -7,7 +7,8 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 from evento.tests import attendee
-from .models import Equipo, Integrante, Partida, Torneo
+from evento.serializers import PaseSerializer
+from .models import CambioIntegrante, Equipo, Integrante, Partida, Torneo
 from .services import generar_bracket, registrar_resultado
 
 def tournament(capacity=4):
@@ -362,6 +363,67 @@ def test_capitan_no_puede_reemplazar_por_integrante_de_otro_equipo():
         "rut_entrante":segundo.capitan.rut,"gamertag":"nuevo"},format="json")
     assert response.status_code==400
     assert "ya participa" in response.data["detail"]
+
+@pytest.mark.django_db
+def test_admin_reemplaza_con_llave_en_curso_sin_modificar_partidas_y_audita():
+    t=tournament(); reemplazado=team(t,"A",_rut_valido(0)); team(t,"B",_rut_valido(1))
+    t.estado="cerrado"; t.save(update_fields=["estado"]); generar_bracket(t)
+    t.estado="en_curso"; t.save(update_fields=["estado"])
+    referencias=list(t.partidas.values_list("equipo_a_id","equipo_b_id")); saliente=reemplazado.capitan
+    entrante=attendee(_rut_valido(2),"Comodín"); user=get_user_model().objects.create_user("coordinador")
+    client=APIClient(); client.force_authenticate(user)
+    response=client.post(f"/api/admin/equipos/{reemplazado.pk}/reemplazar/",{
+        "rut_saliente":saliente.rut,"rut_entrante":entrante.rut,"motivo":"no_se_presento","gamertag":"wild"},format="json")
+    assert response.status_code==200
+    reemplazado.refresh_from_db(); cambio=CambioIntegrante.objects.get(equipo=reemplazado)
+    assert reemplazado.capitan==entrante and cambio.realizado_por==user
+    assert response.data["integrantes"][0]["es_capitan"] is True
+    assert response.data["integrantes"][0]["es_comodin"] is True
+    assert list(t.partidas.values_list("equipo_a_id","equipo_b_id"))==referencias
+    assert PaseSerializer(entrante).data["torneos"][0]["slug"]==t.slug
+    assert PaseSerializer(saliente).data["torneos"]==[]
+
+@pytest.mark.django_db
+def test_admin_reemplazo_valida_finalizado_registro_equipo_nombre_y_forzar():
+    t=tournament(); t.bloque="uno"; t.save(update_fields=["bloque"]); objetivo=team(t,"A",_rut_valido(0))
+    otro=team(t,"Nombre ocupado",_rut_valido(1)); no_registrado=_rut_valido(9)
+    user=get_user_model().objects.create_user("coordinador"); client=APIClient(); client.force_authenticate(user)
+    url=f"/api/admin/equipos/{objetivo.pk}/reemplazar/"
+    base={"rut_saliente":objetivo.capitan.rut,"motivo":"otro"}
+    response=client.post(url,base|{"rut_entrante":no_registrado},format="json")
+    assert response.status_code==400 and "no está registrado" in response.data["detail"]
+    response=client.post(url,base|{"rut_entrante":otro.capitan.rut},format="json")
+    assert response.status_code==400 and "ya participa" in response.data["detail"]
+    bloque=Torneo.objects.create(nombre="Otro torneo",slug="otro",juego="Game",modalidad="individual",jugadores_por_equipo=1,cupo_equipos=4,bloque="uno",hora_inicio=time(11),hora_fin=time(12),cierre_inscripciones=timezone.now()+timedelta(days=1))
+    comodin=attendee(_rut_valido(2),"Comodín"); e=Equipo.objects.create(torneo=bloque,nombre="Otro",capitan=comodin,estado="confirmado"); Integrante.objects.create(equipo=e,asistente=comodin)
+    response=client.post(url,base|{"rut_entrante":comodin.rut},format="json")
+    assert response.status_code==400 and "Otro torneo" in response.data["detail"]
+    response=client.post(url,base|{"rut_entrante":comodin.rut,"forzar":True,"nombre_equipo":"nombre OCUPADO"},format="json")
+    assert response.status_code==400 and "nombre ya está tomado" in response.data["detail"]
+    response=client.post(url,base|{"rut_entrante":comodin.rut,"forzar":True},format="json")
+    assert response.status_code==200
+    t.estado="finalizado"; t.save(update_fields=["estado"]); nuevo=attendee(_rut_valido(3),"Nuevo")
+    response=client.post(url,{"rut_saliente":comodin.rut,"rut_entrante":nuevo.rut,"motivo":"otro"},format="json")
+    assert response.status_code==400 and "ya finalizó" in response.data["detail"]
+
+@pytest.mark.django_db
+def test_admin_capitan_candidatos_y_autenticacion():
+    t=tournament(); t.bloque="uno"; t.save(update_fields=["bloque"]); equipo=team(t,"A",_rut_valido(0))
+    fuera=attendee(_rut_valido(1),"Fuera"); client=APIClient()
+    assert client.patch(f"/api/admin/equipos/{equipo.pk}/",{"capitan_rut":fuera.rut},format="json").status_code==401
+    assert client.post(f"/api/admin/equipos/{equipo.pk}/reemplazar/",{},format="json").status_code==401
+    assert client.get("/api/admin/torneos/test/candidatos/?q=Fu").status_code==401
+    client.force_authenticate(get_user_model().objects.create_user("coordinador"))
+    response=client.patch(f"/api/admin/equipos/{equipo.pk}/",{"capitan_rut":fuera.rut},format="json")
+    assert response.status_code==400 and "integrante" in response.data["detail"]
+    assert client.get("/api/admin/torneos/test/candidatos/?q=F").data==[]
+    otro=Torneo.objects.create(nombre="Conflicto",slug="conflicto",juego="Game",modalidad="individual",jugadores_por_equipo=1,cupo_equipos=4,bloque="uno",hora_inicio=time(11),hora_fin=time(12),cierre_inscripciones=timezone.now()+timedelta(days=1))
+    e=Equipo.objects.create(torneo=otro,nombre="Fuera",capitan=fuera,estado="confirmado"); Integrante.objects.create(equipo=e,asistente=fuera)
+    response=client.get("/api/admin/torneos/test/candidatos/?q=Fu")
+    assert response.status_code==200 and response.data[0]["rut"]==fuera.rut
+    assert response.data[0]["conflicto_bloque"]=="Conflicto"
+    response=client.get(f"/api/admin/torneos/test/candidatos/?q={equipo.capitan.rut[:2]}")
+    assert all(x["rut"]!=equipo.capitan.rut for x in response.data)
 
 @pytest.mark.django_db
 def test_retirar_equipo_promueve_primero_en_espera():
