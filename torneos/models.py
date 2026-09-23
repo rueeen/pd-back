@@ -42,6 +42,7 @@ class CambioIntegrante(models.Model):
     motivo=models.CharField(max_length=20,choices=MOTIVOS)
     detalle=models.CharField(max_length=200,blank=True)
     origen=models.CharField(max_length=10,choices=ORIGENES,default="admin")
+    tras_cierre=models.BooleanField(default=False)
     realizado_por=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True)
     creado_en=models.DateTimeField(auto_now_add=True)
     class Meta: ordering=["-creado_en"]

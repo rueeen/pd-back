@@ -218,7 +218,9 @@ def test_endpoint_admin_torneo_requiere_auth_y_cumple_contrato():
     client.force_authenticate(user)
     response=client.get("/api/admin/torneos/test/")
     assert response.status_code==200
-    assert set(response.data)=={"torneo","slug","estado","horario","equipos_confirmados","equipos_espera","rondas"}
+    assert set(response.data)=={"torneo","slug","estado","modalidad","jugadores_por_equipo","horario","equipos_confirmados","equipos_espera","rondas"}
+    assert response.data["modalidad"]=="individual"
+    assert response.data["jugadores_por_equipo"]==1
 
 @pytest.mark.django_db
 def test_acreditar_y_sortear_solo_equipos_acreditados():
@@ -346,8 +348,41 @@ def test_bracket_no_publicado_oculta_equipos_y_rondas():
     response=APIClient().get("/api/torneos/test/bracket/")
     assert response.status_code==200
     assert response.data["rondas"]==[]
+    assert response.data["modalidad"]==t.modalidad
+    assert response.data["jugadores_por_equipo"]==t.jugadores_por_equipo
     assert "equipos_confirmados" not in response.data
     assert "equipos_espera" not in response.data
+
+@pytest.mark.django_db
+def test_cambios_durante_inscripcion_no_consumen_comodines_del_capitan():
+    t=tournament(); t.modalidad="equipo"; t.jugadores_por_equipo=2; t.save(update_fields=["modalidad","jugadores_por_equipo"])
+    equipo=team(t,"A",_rut_valido(0)); integrante=attendee(_rut_valido(1),"Integrante")
+    Integrante.objects.create(equipo=equipo,asistente=integrante)
+    client=APIClient(); actual=integrante
+
+    for numero in (2,3):
+        entrante=attendee(_rut_valido(numero),f"Cambio {numero}")
+        response=client.post(f"/api/equipos/{equipo.pk}/integrantes/",{
+            "codigo_capitan":equipo.capitan.codigo,"rut_saliente":actual.rut,
+            "rut_entrante":entrante.rut,"gamertag":f"cambio-{numero}"},format="json")
+        assert response.status_code==200
+        actual=entrante
+
+    t.estado="cerrado"; t.save(update_fields=["estado"])
+    assert PaseSerializer(equipo.capitan).data["torneos"][0]["comodines_restantes"]==2
+
+    for restante,numero in ((1,4),(0,5)):
+        entrante=attendee(_rut_valido(numero),f"Comodín {numero}")
+        response=client.post(f"/api/equipos/{equipo.pk}/integrantes/",{
+            "codigo_capitan":equipo.capitan.codigo,"rut_saliente":actual.rut,
+            "rut_entrante":entrante.rut,"codigo_entrante":entrante.codigo,
+            "gamertag":f"comodin-{numero}"},format="json")
+        assert response.status_code==200
+        assert response.data["comodines_restantes"]==restante
+        actual=entrante
+
+    assert equipo.cambios.filter(origen="capitan",tras_cierre=False).count()==2
+    assert equipo.cambios.filter(origen="capitan",tras_cierre=True).count()==2
 
 @pytest.mark.django_db
 def test_capitan_no_puede_reemplazar_por_integrante_de_otro_equipo():
@@ -436,3 +471,18 @@ def test_retirar_equipo_promueve_primero_en_espera():
     confirmado.refresh_from_db(); espera_uno.refresh_from_db(); espera_dos.refresh_from_db()
     assert confirmado.estado=="retirado"; assert espera_uno.estado=="confirmado"; assert espera_dos.estado=="espera"
     assert t.promociones.filter(equipo=espera_uno).exists()
+
+@pytest.mark.django_db
+def test_equipo_retirado_no_puede_gestionarse_desde_el_pase():
+    t=tournament(); equipo=team(t,"A",_rut_valido(0)); client=APIClient()
+    response=client.delete(f"/api/equipos/{equipo.pk}/",{"codigo_capitan":equipo.capitan.codigo},format="json")
+    assert response.status_code==200
+
+    equipo.refresh_from_db()
+    torneo_en_pase=PaseSerializer(equipo.capitan).data["torneos"][0]
+    assert torneo_en_pase["puede_gestionar"] is False
+
+    response=client.patch(f"/api/equipos/{equipo.pk}/",{
+        "codigo_capitan":equipo.capitan.codigo,"nombre_equipo":"Renombrado"},format="json")
+    assert response.status_code==400
+    assert response.data["detail"]=="El equipo está retirado."
