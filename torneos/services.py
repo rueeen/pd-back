@@ -1,12 +1,55 @@
 import math, random
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Q
 from evento.models import Asistente
 from evento.validators import normalizar_rut
 from .models import CambioIntegrante, Equipo, Integrante, Partida, Torneo
 
+MAX_COMODINES_CAPITAN=2
+
+def autorizacion_gestion_capitan(equipo):
+    if equipo.torneo.estado in ("sorteado","en_curso","finalizado") or equipo.torneo.llave_publicada:
+        return False,"La llave ya fue sorteada; debes hablar con el coordinador."
+    if not equipo.torneo.inscripciones_abiertas: return False,"Las inscripciones no están abiertas."
+    return True,None
+
+def _related(items,filter_kwargs):
+    """Use a prefetched relation when available, and its queryset otherwise."""
+    cache=getattr(items.instance,"_prefetched_objects_cache",{})
+    cache_name=items.field.remote_field.get_accessor_name()
+    if cache_name in cache:
+        values=cache[cache_name]
+        return [x for x in values if all(getattr(x,k)==v for k,v in filter_kwargs.items())]
+    return items.filter(**filter_kwargs)
+
+def comodines_restantes_capitan(equipo):
+    if equipo.torneo.estado=="inscripcion": return None
+    cambios=_related(equipo.cambios,{"origen":"capitan"})
+    usados=len(cambios) if isinstance(cambios,list) else cambios.count()
+    return max(0,MAX_COMODINES_CAPITAN-usados)
+
+def autorizacion_reemplazo_capitan(equipo):
+    torneo=equipo.torneo
+    if torneo.jugadores_por_equipo<=1: return False,"En torneos individuales el reemplazo lo hace el coordinador."
+    if torneo.estado not in ("inscripcion","cerrado","sorteado","en_curso"):
+        return False,"El torneo ya finalizó; no se pueden cambiar integrantes."
+    if equipo.estado=="retirado": return False,"No se pueden cambiar integrantes de un equipo retirado."
+    partidas=_related(torneo.partidas,{})
+    if isinstance(partidas,list):
+        eliminado=any(p.estado=="finalizada" and equipo.pk in (p.equipo_a_id,p.equipo_b_id) and p.ganador_id not in (None,equipo.pk) for p in partidas)
+        jugando=any(p.estado=="en_curso" and equipo.pk in (p.equipo_a_id,p.equipo_b_id) for p in partidas)
+    else:
+        eliminado=(partidas.filter(Q(equipo_a=equipo)|Q(equipo_b=equipo),estado="finalizada")
+                   .exclude(Q(ganador=equipo)|Q(ganador=None)).exists())
+        jugando=partidas.filter(Q(equipo_a=equipo)|Q(equipo_b=equipo),estado="en_curso").exists()
+    if eliminado: return False,"Tu equipo ya fue eliminado."
+    if jugando: return False,"No puedes cambiar integrantes mientras tu equipo está jugando; hazlo antes de la siguiente partida."
+    if comodines_restantes_capitan(equipo)==0: return False,"Tu equipo ya usó el máximo de comodines."
+    return True,None
+
 @transaction.atomic
-def reemplazar_integrante(equipo,rut_saliente,rut_entrante,usuario,motivo,detalle="",gamertag="",nombre_equipo=None,forzar=False):
+def reemplazar_integrante(equipo,rut_saliente,rut_entrante,usuario,motivo,detalle="",gamertag="",nombre_equipo=None,forzar=False,origen="admin"):
     equipo=Equipo.objects.select_for_update().select_related("torneo","capitan").get(pk=equipo.pk)
     if equipo.torneo.estado=="finalizado": raise ValidationError("El torneo ya finalizó; no se pueden cambiar integrantes.")
     if equipo.estado=="retirado": raise ValidationError("No se pueden cambiar integrantes de un equipo retirado.")
@@ -34,7 +77,7 @@ def reemplazar_integrante(equipo,rut_saliente,rut_entrante,usuario,motivo,detall
     if equipo.capitan_id==saliente.pk: equipo.capitan=entrante; fields.append("capitan")
     if nombre: equipo.nombre=nombre; fields.append("nombre")
     if fields: equipo.save(update_fields=fields)
-    CambioIntegrante.objects.create(equipo=equipo,saliente=saliente,entrante=entrante,motivo=motivo,detalle=str(detalle).strip(),realizado_por=usuario)
+    CambioIntegrante.objects.create(equipo=equipo,saliente=saliente,entrante=entrante,motivo=motivo,detalle=str(detalle).strip(),realizado_por=usuario,origen=origen)
     return equipo
 
 def _colocar(partida,equipo):

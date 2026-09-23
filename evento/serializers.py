@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from .models import Area, Asistente, Carrera, ConfiguracionEvento, RetiroCompleto
 from .validators import enmascarar_rut, validar_rut
+from torneos.services import (autorizacion_gestion_capitan, autorizacion_reemplazo_capitan,
+                              comodines_restantes_capitan)
 
 class AsistenteSerializer(serializers.ModelSerializer):
     area=serializers.SlugRelatedField(slug_field="slug",queryset=Area.objects.filter(activa=True),allow_null=True,required=False)
@@ -59,12 +61,23 @@ class PaseSerializer(serializers.ModelSerializer):
     def get_rut(self,obj): return enmascarar_rut(obj.rut)
     def get_torneos(self,obj):
         result=[]
-        for participation in obj.participaciones.select_related("equipo__torneo","equipo__capitan").prefetch_related("equipo__integrantes__asistente"):
+        participaciones=obj.participaciones.select_related("equipo__torneo","equipo__capitan").prefetch_related(
+            "equipo__integrantes__asistente","equipo__cambios","equipo__torneo__partidas")
+        for participation in participaciones:
             equipo=participation.equipo; torneo=equipo.torneo
+            es_capitan=equipo.capitan_id==obj.pk
+            puede_gestionar=autorizacion_gestion_capitan(equipo)[0] if es_capitan else False
+            puede_reemplazar,motivo=autorizacion_reemplazo_capitan(equipo) if es_capitan else (False,None)
             item={"slug":torneo.slug,"nombre":torneo.nombre,"equipo_id":equipo.pk,"equipo":equipo.nombre,
-                  "estado_equipo":equipo.estado,"posicion_espera":None,"es_capitan":equipo.capitan_id==obj.pk,
+                  "estado_equipo":equipo.estado,"posicion_espera":None,"es_capitan":es_capitan,
                   "torneo_estado":torneo.estado,"horario":f"{torneo.hora_inicio:%H:%M} – {torneo.hora_fin:%H:%M}",
-                  "integrantes":[{"nombre":x.asistente.nombre,"apellido":x.asistente.apellido,"gamertag":x.gamertag} for x in equipo.integrantes.all()]}
+                  "modalidad":torneo.modalidad,"inscripciones_abiertas":torneo.inscripciones_abiertas,
+                  "llave_publicada":torneo.llave_publicada,"puede_gestionar":puede_gestionar,
+                  "puede_reemplazar":puede_reemplazar,"motivo_no_reemplazo":None if puede_reemplazar else motivo,
+                  "comodines_restantes":comodines_restantes_capitan(equipo) if es_capitan else None,
+                  "integrantes":[{"id":x.pk,"nombre":x.asistente.nombre,"apellido":x.asistente.apellido,
+                                  "gamertag":x.gamertag,"es_capitan":x.asistente_id==equipo.capitan_id}
+                                 for x in equipo.integrantes.all()]}
             if equipo.estado=="espera": item["posicion_espera"]=torneo.equipos.filter(estado="espera",creado_en__lte=equipo.creado_en).count()
             result.append(item)
         return result

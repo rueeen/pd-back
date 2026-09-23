@@ -351,7 +351,8 @@ def test_bracket_no_publicado_oculta_equipos_y_rondas():
 
 @pytest.mark.django_db
 def test_capitan_no_puede_reemplazar_por_integrante_de_otro_equipo():
-    t=tournament(); primero=team(t,"A",_rut_valido(0)); segundo=team(t,"B",_rut_valido(1))
+    t=tournament(); t.modalidad="equipo"; t.jugadores_por_equipo=2; t.save(update_fields=["modalidad","jugadores_por_equipo"])
+    primero=team(t,"A",_rut_valido(0)); segundo=team(t,"B",_rut_valido(1))
     response=APIClient().post(f"/api/equipos/{primero.pk}/integrantes/",{
         "codigo_capitan":primero.capitan.codigo,"rut_saliente":primero.capitan.rut,
         "rut_entrante":segundo.capitan.rut,"gamertag":"nuevo"},format="json")
