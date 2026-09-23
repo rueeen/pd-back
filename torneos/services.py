@@ -9,6 +9,7 @@ from .models import CambioIntegrante, Equipo, Integrante, Partida, Torneo
 MAX_COMODINES_CAPITAN=2
 
 def autorizacion_gestion_capitan(equipo):
+    if equipo.estado=="retirado": return False,"El equipo está retirado."
     if equipo.torneo.estado in ("sorteado","en_curso","finalizado") or equipo.torneo.llave_publicada:
         return False,"La llave ya fue sorteada; debes hablar con el coordinador."
     if not equipo.torneo.inscripciones_abiertas: return False,"Las inscripciones no están abiertas."
@@ -25,7 +26,7 @@ def _related(items,filter_kwargs):
 
 def comodines_restantes_capitan(equipo):
     if equipo.torneo.estado=="inscripcion": return None
-    cambios=_related(equipo.cambios,{"origen":"capitan"})
+    cambios=_related(equipo.cambios,{"origen":"capitan","tras_cierre":True})
     usados=len(cambios) if isinstance(cambios,list) else cambios.count()
     return max(0,MAX_COMODINES_CAPITAN-usados)
 
@@ -77,7 +78,7 @@ def reemplazar_integrante(equipo,rut_saliente,rut_entrante,usuario,motivo,detall
     if equipo.capitan_id==saliente.pk: equipo.capitan=entrante; fields.append("capitan")
     if nombre: equipo.nombre=nombre; fields.append("nombre")
     if fields: equipo.save(update_fields=fields)
-    CambioIntegrante.objects.create(equipo=equipo,saliente=saliente,entrante=entrante,motivo=motivo,detalle=str(detalle).strip(),realizado_por=usuario,origen=origen)
+    CambioIntegrante.objects.create(equipo=equipo,saliente=saliente,entrante=entrante,motivo=motivo,detalle=str(detalle).strip(),realizado_por=usuario,origen=origen,tras_cierre=equipo.torneo.estado!="inscripcion")
     return equipo
 
 def _colocar(partida,equipo):

@@ -38,6 +38,7 @@ def _datos_bracket(torneo,admin=False):
                                 "integrantes__asistente","cambios__saliente","cambios__entrante","cambios__realizado_por"),many=True).data
                             if admin else list(torneo.equipos.filter(estado=estado).values("id","nombre")))
     return {"torneo":torneo.nombre,"slug":torneo.slug,"estado":torneo.estado,
+            "modalidad":torneo.modalidad,"jugadores_por_equipo":torneo.jugadores_por_equipo,
             "horario":f"{torneo.hora_inicio:%H:%M} – {torneo.hora_fin:%H:%M}",
             "equipos_confirmados":equipos("confirmado"),"equipos_espera":equipos("espera"),
             "rondas":[{"ronda":n,"nombre":_nombre_ronda(n,total),"total_partidas":sum(x["ronda"]==n for x in matches),
@@ -67,6 +68,7 @@ class BracketView(APIView):
         torneo=get_object_or_404(Torneo,slug=slug)
         if not torneo.llave_publicada:
             return Response({"torneo":torneo.nombre,"slug":torneo.slug,"estado":torneo.estado,
+                             "modalidad":torneo.modalidad,"jugadores_por_equipo":torneo.jugadores_por_equipo,
                              "horario":f"{torneo.hora_inicio:%H:%M} – {torneo.hora_fin:%H:%M}",
                              "total_inscritos":torneo.equipos.exclude(estado="retirado").count(),
                              "cupo_equipos":torneo.cupo_equipos,"rondas":[]})
