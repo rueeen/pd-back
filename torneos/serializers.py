@@ -27,7 +27,7 @@ class CambioIntegranteSerializer(serializers.ModelSerializer):
     saliente=serializers.SerializerMethodField(); entrante=serializers.SerializerMethodField()
     motivo_display=serializers.CharField(source="get_motivo_display",read_only=True)
     realizado_por=serializers.SerializerMethodField()
-    class Meta: model=CambioIntegrante; fields=["saliente","entrante","motivo","motivo_display","detalle","realizado_por","creado_en"]
+    class Meta: model=CambioIntegrante; fields=["saliente","entrante","motivo","motivo_display","detalle","origen","realizado_por","creado_en"]
     def get_saliente(self,o): return f"{o.saliente.nombre} {o.saliente.apellido}"
     def get_entrante(self,o): return f"{o.entrante.nombre} {o.entrante.apellido}"
     def get_realizado_por(self,o):

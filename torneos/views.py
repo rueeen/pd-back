@@ -14,7 +14,9 @@ from evento.validators import normalizar_rut
 from evento.views import ExplainedAnonRateThrottle
 from .models import Equipo, Integrante, Partida, PromocionEspera, Torneo
 from .serializers import *
-from .services import generar_bracket, registrar_resultado, reemplazar_integrante
+from .services import (autorizacion_gestion_capitan, autorizacion_reemplazo_capitan,
+                       comodines_restantes_capitan, generar_bracket, MAX_COMODINES_CAPITAN,
+                       registrar_resultado, reemplazar_integrante)
 
 class TeamManagementThrottle(ExplainedAnonRateThrottle): scope="team_management"
 
@@ -227,10 +229,15 @@ def _autorizar_capitan(equipo,data):
     codigo=str(data.get("codigo_capitan","")).upper()
     if not codigo or codigo!=equipo.capitan.codigo.upper():
         return Response({"detail":"El código no corresponde al capitán del equipo."},status=status.HTTP_403_FORBIDDEN)
-    if equipo.torneo.estado in ("sorteado","en_curso","finalizado") or equipo.torneo.llave_publicada:
-        return Response({"detail":"La llave ya fue sorteada; debes hablar con el coordinador."},status=status.HTTP_400_BAD_REQUEST)
-    if not equipo.torneo.inscripciones_abiertas:
-        return Response({"detail":"Las inscripciones no están abiertas."},status=status.HTTP_400_BAD_REQUEST)
+    permitido,motivo=autorizacion_gestion_capitan(equipo)
+    if not permitido: return Response({"detail":motivo},status=status.HTTP_400_BAD_REQUEST)
+
+def _autorizar_reemplazo_capitan(equipo,data):
+    codigo=str(data.get("codigo_capitan","")).upper()
+    if not codigo or codigo!=equipo.capitan.codigo.upper():
+        return Response({"detail":"El código no corresponde al capitán del equipo."},status=status.HTTP_403_FORBIDDEN)
+    permitido,motivo=autorizacion_reemplazo_capitan(equipo)
+    if not permitido: return Response({"detail":motivo},status=status.HTTP_400_BAD_REQUEST)
 
 class EquipoCapitanView(APIView):
     permission_classes=[AllowAny]
@@ -265,15 +272,25 @@ class EquipoIntegrantesView(APIView):
     @transaction.atomic
     def post(self,r,pk):
         equipo=get_object_or_404(Equipo.objects.select_for_update().select_related("capitan","torneo"),pk=pk)
-        error=_autorizar_capitan(equipo,r.data)
+        error=_autorizar_reemplazo_capitan(equipo,r.data)
         if error: return error
-        try: saliente=normalizar_rut(r.data.get("rut_saliente","")); entrante=normalizar_rut(r.data.get("rut_entrante",""))
+        if "integrante_id" in r.data:
+            integrante=get_object_or_404(Integrante.objects.select_related("asistente"),pk=r.data["integrante_id"],equipo=equipo)
+            saliente=integrante.asistente.rut
+        else:
+            try: saliente=normalizar_rut(r.data.get("rut_saliente",""))
+            except DjangoValidationError as exc: raise ValidationError({"detail":exc.messages[0]})
+            integrante=get_object_or_404(Integrante.objects.select_related("asistente"),equipo=equipo,asistente__rut=saliente)
+        try: entrante=normalizar_rut(r.data.get("rut_entrante",""))
         except DjangoValidationError as exc: raise ValidationError({"detail":exc.messages[0]})
         if saliente==equipo.capitan.rut: raise ValidationError({"detail":"El capitán no puede sacarse a sí mismo; debe retirar el equipo completo."})
-        integrante=get_object_or_404(Integrante,equipo=equipo,asistente__rut=saliente)
         nuevo=Asistente.objects.filter(rut=entrante).first()
-        if not nuevo: raise ValidationError({"detail":f"El RUT {entrante} no está registrado; debe registrarse primero al evento."})
-        if Integrante.objects.filter(equipo__torneo=equipo.torneo,asistente=nuevo).exclude(equipo__estado="retirado").exclude(pk=integrante.pk).exists():
-            raise ValidationError({"detail":f"El asistente con RUT {entrante} ya participa en un equipo de este torneo."})
-        integrante.asistente=nuevo; integrante.gamertag=str(r.data.get("gamertag","")).strip(); integrante.save(update_fields=["asistente","gamertag"])
-        return Response({"equipo_id":equipo.pk,"rut_saliente":saliente,"rut_entrante":entrante,"gamertag":integrante.gamertag})
+        if equipo.torneo.estado!="inscripcion" and (not nuevo or str(r.data.get("codigo_entrante","")).upper()!=nuevo.codigo.upper()):
+            raise ValidationError({"detail":"El RUT y el código del comodín no coinciden."})
+        try:
+            reemplazar_integrante(equipo,saliente,entrante,None,r.data.get("motivo","no_se_presento"),
+                                  r.data.get("detalle",""),r.data.get("gamertag",""),forzar=False,origen="capitan")
+        except DjangoValidationError as exc: raise ValidationError({"detail":exc.messages[0]})
+        return Response({"equipo_id":equipo.pk,"rut_saliente":saliente,"rut_entrante":entrante,
+                         "gamertag":str(r.data.get("gamertag","")).strip(),
+                         "comodines_restantes":comodines_restantes_capitan(equipo)})
